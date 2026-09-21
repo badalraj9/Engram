@@ -9,7 +9,8 @@ Each phase exits with a runnable, tested slice. No test-compat hacks — phases 
 
 ## P1 truth — log is law
 - `internal/truth/store.go, keys.go, compaction.go`
-- Exit: append / close-interval / `as_of` reads + M8a (kill-9 → replay → bit-identical).
+- Locked: IDs UUIDv4-opaque + sequence==txn (one clock, global seq namespace across all prefixes); group commit with ack-after-sync; supersede as one atomic entry; CRC32 per entry, validate-at-our-boundary, loud truncation; codec hand-rolled versioned binary (golden-bytes test + reject-unknown-version, fail-closed); versioned secondaries (latest via reverse-seek, history via prefix scan); `as_of` exact-key + interval filter only (term search is P3).
+- Exit: append / close-interval / `as_of` reads + M8a (kill-9 → replay → bit-identical; torn-supersede truncation with no partial apply; key-uniqueness property across appends and supersedes).
 
 ## P2 write — verdicts before index
 - `internal/processing/gate.go, confidence.go, clusterer.go, matcher.go, acl.go`
@@ -30,7 +31,7 @@ Each phase exits with a runnable, tested slice. No test-compat hacks — phases 
 - `internal/rpc/server.go, router.go` (payload-shape dispatch: content → `correct`, verdict → `attest`, new → `emit`; `resolve` routed to `resolve.go`)
 - `internal/maintenance/consolidate.go, prune.go, calibrate.go` (serialized tick: consolidate → prune → calibrate, no ticker)
 - `internal/telemetry/`
-- Exit: 7 ops over UDS, tick ordering proven, no background goroutine. Prune invariant: never removes a live EPISODIC record or any record reachable from a live DerivedFrom chain.
+- Exit: 7 ops over UDS, tick ordering proven, no background goroutine. Prune invariant: never removes a live EPISODIC record or any record reachable from a live DerivedFrom chain. RPC review checklist (structural ack rule): single handler path append→Sync→respond with no early return. Emergency repair op (operator-only mid-log truncation) specified here when P5 is built — the unexported primitive has no other future caller.
 
 ## P6 harden — full gates
 - `internal/dynamics/` stubbed (FHRR deferred to v1.1+), `cmd/`, `client/`

@@ -18,7 +18,7 @@
 | id | generated, immutable |
 | subject, predicate, object | the claim |
 | valid-time interval `[t-, t+)` | when true in the world |
-| transaction-time interval `[k-, k+)` | when Engram learned it — **assigned server-side at commit, never caller-supplied** (this is also the mechanism that makes crash-retry safe — see §4) |
+| transaction-time interval `[k-, k+)` | when Engram learned it — **assigned server-side at commit, never caller-supplied** (this is also the mechanism that makes crash-retry safe — see §4). The commit sequence IS this axis: birth seq → `k-`, close seq → `k+)`, open end otherwise — one clock, born in one function, nothing to drift. |
 | provenance | source + session id(s), as id-refs (supports session-clustering for FR9) |
 | derived_from | parent record IDs for SUMMARY/SEMANTIC records; empty for EPISODIC (rollback + re-derive target) |
 | ACL tier | trust/access level |
@@ -34,8 +34,8 @@
 
 ## 2. Storage Layout
 
-- **Truth Store:** append-only, BadgerDB-backed. Governed by the four storage rules in the tech-stack doc §2.5 (log-only separation, anti-densification under compaction, MVCC not transaction-time, escape-hatch interface).
-- **Derived structures** (inverted index, MinHash tables, roaring bitsets): fully rebuildable from the Truth Store log alone.
+- **Truth Store:** append-only, BadgerDB-backed. Governed by the four storage rules in the tech-stack doc §2.5 (log-only separation, anti-densification under compaction, MVCC not transaction-time, escape-hatch interface). The commit-sequence namespace is global across all key prefixes — one clock, one reverse-seek recovery.
+- **Derived structures** (inverted index, MinHash tables, roaring bitsets, ID→seq lookup): fully rebuildable from the Truth Store log alone. The ID→seq lookup is derived state by the same rule — never logged, never required for replay; logging it "for convenience" would reintroduce a second ordering through the back door.
 - **Rebuild procedure — the replay-vs-live-writes rule [RATIFIED]:** replay begins by recording the log's current tail offset as a snapshot boundary. Replay processes only up to that offset. Live writes arriving during replay append normally, past the boundary, and are applied directly against the still-serving old index. Once replay reaches the snapshot offset, the new index atomically swaps in, then drains whatever accumulated past the boundary, in log order. This prevents both double-apply and silent drop — the failure modes an unspecified replay procedure would otherwise hit.
 
 ---
@@ -72,7 +72,7 @@ RESTRENGTHEN - matches, IDENTICAL (subject, predicate, object) -> bump strength/
 
 **Match semantics (v1):** normalized exact-key match on (subject, predicate), plus MinHash n-gram fuzzy dedup scoped *only* to the MERGE band (catches paraphrase, e.g. "Acme" vs "Acme Corp"). Fellegi-Sunter-style probabilistic resolution is explicitly deferred — structural-feature independence violations were identified during research and exact-first is the safer v1 default. "Raj" and "Rahul" remain distinct records in v1.
 
-**RESTRENGTHEN is load-bearing, not cosmetic:** it's also the FR14 promotion trigger for STAGED/quarantined records (a second independent corroborating signal), and it's what makes crash-and-retry safe with zero new idempotency machinery — a retried `emit` after a crash-before-ack carries identical content and is absorbed here, provided transaction-time is server-assigned (§1).
+**RESTRENGTHEN is load-bearing, not cosmetic:** it's also the FR14 promotion trigger for STAGED/quarantined records (a second independent corroborating signal), and it's what makes crash-and-retry safe with zero new idempotency machinery — a retried `emit` after a crash-before-ack carries identical content and is absorbed here, provided transaction-time is server-assigned (§1). Revision (supersede, correction, resolution) is written as a single atomic log entry via the `Supersede` primitive — close-interval and append are inseparable, so no partial revision state can exist.
 
 **Three concurrency rules found during seam audit, all now fixed:**
 1. **Corrections hold a priority lock over concurrent supersede** attempts on the same record during the labile correction window — supersede defers, never races.
@@ -128,6 +128,8 @@ Inherited from BadgerDB's own WAL and crash-recovery (per tech-stack §2.5) rath
 - **`emit` fails to reach durability (log write fails):** no write, no event, no verdict returned. Fail closed — never partially commit.
 - **`recall` under partial index corruption:** [OPEN — needs explicit resolution before v1 ships] the design doc's rebuildability guarantee (§2) implies a corrupted index can be discarded and rebuilt from the Truth Store log, but the exact trigger/detection mechanism for "the index is corrupt, rebuild now" has not been specified.
 - **Crash mid-`emit`:** covered by RESTRENGTHEN + server-side transaction-time (§4) — a retry is indistinguishable from ordinary corroboration, no special-case idempotency logic needed.
+- **Corrupt tail at open:** auto-amputated, loudly (stderr + `Truncated()`); store reopens writable at the truncated tail.
+- **Mid-log corruption with intact successors:** open refuses fail-closed (CORRUPT_INDEX naming the offset) — amputating would silently delete the good suffix. Operator repair only.
 
 ---
 
@@ -174,7 +176,7 @@ Transport: gRPC over Unix domain socket (tech-stack §2.1). Client stubs are gen
 
 ## 11. Validation Protocol Reference
 
-M1-M6 per the SRS/WM spec (working-memory math + bi-temporal property suite). M7-M8 ratified into SRS v1.3 §7:
+M1-M6 per the SRS/WM spec (working-memory math + bi-temporal property suite). M7-M8 ratified into SRS v1.3 §7 (M8 enforced by two falsifiable tests: torn-supersede truncation and key-uniqueness):
 - **M7:** write-cost vs. history size — p99 `emit` latency must stay flat at 1K/100K/1M records, including through compaction. This is the direct empirical test of whether Engram actually avoids MemoryThread's core failure (`_resolve_seeds()` degrading with graph size).
 - **M8:** crash-and-snapshot suite — kill -9 mid-write, verify replay produces a bit-identical rebuild; verify snapshot-consistent reads under concurrent writes (this is the direct test of the MVCC dependency now credited in §6).
 
