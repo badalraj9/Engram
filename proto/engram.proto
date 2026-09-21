@@ -55,6 +55,15 @@ enum ResolveVerdict {
   MERGE = 3;
 }
 
+// RecordType distinguishes episodic observations from derived records.
+// One store, not a tier (FR10). Rollback purges by type.
+enum RecordType {
+  RECORD_TYPE_UNSPECIFIED = 0;
+  EPISODIC = 1;
+  SUMMARY = 2;
+  SEMANTIC = 3;
+}
+
 // Axis selects the bi-temporal query axis (NFR8).
 enum Axis {
   AXIS_UNSPECIFIED = 0;
@@ -86,6 +95,7 @@ message InputRecord {
   AclTier acl = 8;
   double base_confidence = 9; // [0,1]
   int64 caller_ts_meta = 10;  // metadata only, never ordering truth
+  map<string, string> payload = 11; // non-assertive metadata; gate-invisible
 }
 
 // StoredRecord is a committed truth record (SRS FR3).
@@ -103,6 +113,10 @@ message StoredRecord {
   AclTier acl = 11;
   Status status = 12;
   double base_confidence = 13;
+  RecordType type = 14; // EPISODIC for caller input; SUMMARY/SEMANTIC server-derived
+  repeated string derived_from = 15; // parent IDs; empty for episodic
+  int64 caller_ts_meta = 16; // persisted caller claim, never ordering truth
+  map<string, string> payload = 17; // non-assertive metadata; gate-invisible
 }
 
 message EmitRequest {

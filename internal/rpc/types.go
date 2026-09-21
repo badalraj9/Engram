@@ -4,6 +4,10 @@
 // They intentionally do not import generated protobuf code — the wire
 // schema in proto/engram.proto maps onto these at the RPC boundary
 // (P5), so the core never depends on the transport.
+//
+// Naming reservation: "valid" is owned by belief-state/temporal
+// semantics. Structural checks are therefore named WellFormed, never
+// Valid — the future liveness helper will be IsLive/BelievedAt.
 package rpc
 
 import (
@@ -27,8 +31,8 @@ const (
 	VerdictStaged       Verdict = "STAGED"
 )
 
-// Valid reports whether v is a known gate verdict.
-func (v Verdict) Valid() bool {
+// WellFormed reports whether v is a known gate verdict.
+func (v Verdict) WellFormed() bool {
 	switch v {
 	case VerdictSkip, VerdictInsert, VerdictMerge,
 		VerdictUpdate, VerdictRestrengthen, VerdictStaged:
@@ -48,14 +52,38 @@ const (
 	StatusTombstoned Status = "TOMBSTONED"
 )
 
-// Valid reports whether s is a known lifecycle state.
-func (s Status) Valid() bool {
+// WellFormed reports whether s is a known lifecycle state.
+func (s Status) WellFormed() bool {
 	switch s {
 	case StatusActive, StatusScheduled, StatusBoth, StatusTombstoned:
 		return true
 	}
 	return false
 }
+
+// RecordType distinguishes episodic observations from derived records
+// (P0 locked). Derivations must never feed new derivations without an
+// explicit flag: the gate derives from evidence, not from cache.
+type RecordType string
+
+// Record classes. One store, not a tier (FR10).
+const (
+	RecordEpisodic RecordType = "EPISODIC"
+	RecordSummary  RecordType = "SUMMARY"
+	RecordSemantic RecordType = "SEMANTIC"
+)
+
+// WellFormed reports whether t is a known record class.
+func (t RecordType) WellFormed() bool {
+	switch t {
+	case RecordEpisodic, RecordSummary, RecordSemantic:
+		return true
+	}
+	return false
+}
+
+// Derived reports whether the record is recomputable from other records.
+func (t RecordType) Derived() bool { return t != RecordEpisodic }
 
 // AclTier is the trust/access level (P0 locked: low/user/system).
 type AclTier string
@@ -67,8 +95,8 @@ const (
 	ACLSystem AclTier = "system"
 )
 
-// Valid reports whether a is a known tier.
-func (a AclTier) Valid() bool {
+// WellFormed reports whether a is a known tier.
+func (a AclTier) WellFormed() bool {
 	switch a {
 	case ACLLow, ACLUser, ACLSystem:
 		return true
@@ -89,8 +117,8 @@ const (
 	ResolveMerge ResolveVerdict = "merge"
 )
 
-// Valid reports whether r is a known resolution.
-func (r ResolveVerdict) Valid() bool {
+// WellFormed reports whether r is a known resolution.
+func (r ResolveVerdict) WellFormed() bool {
 	switch r {
 	case ResolveKeepA, ResolveKeepB, ResolveMerge:
 		return true
@@ -107,8 +135,8 @@ const (
 	AxisTransaction Axis = "transaction"
 )
 
-// Valid reports whether a is a known axis.
-func (a Axis) Valid() bool {
+// WellFormed reports whether a is a known axis.
+func (a Axis) WellFormed() bool {
 	switch a {
 	case AxisValid, AxisTransaction:
 		return true
@@ -148,8 +176,8 @@ type Interval struct {
 	To   int64
 }
 
-// Valid reports whether the interval satisfies 0 <= from < to.
-func (iv Interval) Valid() bool { return iv.From >= 0 && iv.From < iv.To }
+// WellFormed reports whether the interval satisfies 0 <= from < to.
+func (iv Interval) WellFormed() bool { return iv.From >= 0 && iv.From < iv.To }
 
 // Open reports whether the interval is still current.
 func (iv Interval) Open() bool { return iv.To == OpenEnd }
@@ -163,9 +191,34 @@ type Provenance struct {
 	Session string
 }
 
-// Valid reports whether both id-refs are present.
-func (p Provenance) Valid() bool {
+// WellFormed reports whether both id-refs are present.
+func (p Provenance) WellFormed() bool {
 	return strings.TrimSpace(p.Source) != "" && strings.TrimSpace(p.Session) != ""
+}
+
+// Payload limits: the map carries non-assertive metadata only — the gate
+// never branches on payload values (merge unions keys monotonically,
+// see P2 gate).
+const (
+	MaxPayloadKeys   = 64
+	MaxPayloadKeyLen = 128
+	MaxPayloadValLen = 4096
+)
+
+// checkPayload validates an opaque non-assertive metadata map.
+func checkPayload(p map[string]string) error {
+	if len(p) > MaxPayloadKeys {
+		return E(CodeInvalidRecord, "payload exceeds 64 keys")
+	}
+	for k, v := range p {
+		if strings.TrimSpace(k) == "" || len(k) > MaxPayloadKeyLen {
+			return E(CodeInvalidRecord, "payload has a bad key")
+		}
+		if len(v) > MaxPayloadValLen {
+			return E(CodeInvalidRecord, "payload value too large")
+		}
+	}
+	return nil
 }
 
 // InputRecord is the caller-supplied shape for emit (SRS §1.3).
@@ -175,11 +228,12 @@ type InputRecord struct {
 	Subject        string
 	Predicate      string
 	Object         string
-	Valid          Interval
+	ValidTime      Interval
 	Provenance     Provenance
 	ACL            AclTier
 	BaseConfidence float64
 	CallerTSMeta   int64 // caller-supplied timestamp, metadata only
+	Payload        map[string]string
 }
 
 // Validate checks the caller-supplied shape.
@@ -187,19 +241,19 @@ func (in InputRecord) Validate() error {
 	if strings.TrimSpace(in.Subject) == "" || strings.TrimSpace(in.Predicate) == "" {
 		return E(CodeInvalidRecord, "subject and predicate are required")
 	}
-	if !in.Valid.Valid() {
+	if !in.ValidTime.WellFormed() {
 		return E(CodeInvalidRecord, "valid interval must satisfy 0 <= from < to")
 	}
-	if !in.Provenance.Valid() {
+	if !in.Provenance.WellFormed() {
 		return E(CodeInvalidRecord, "provenance source and session are required")
 	}
-	if !in.ACL.Valid() {
+	if !in.ACL.WellFormed() {
 		return E(CodeInvalidRecord, "unknown ACL tier")
 	}
 	if math.IsNaN(in.BaseConfidence) || in.BaseConfidence < 0 || in.BaseConfidence > 1 {
 		return E(CodeInvalidRecord, "base confidence must be in [0,1]")
 	}
-	return nil
+	return checkPayload(in.Payload)
 }
 
 // Record is a stored truth record (SRS FR3).
@@ -208,12 +262,55 @@ type Record struct {
 	Subject        string
 	Predicate      string
 	Object         string
-	Valid          Interval // when true in the world
+	ValidTime      Interval // when true in the world (caller's assertion)
 	Txn            Interval // when Engram learned it (server-assigned)
 	Provenance     Provenance
+	DerivedFrom    []string // parent record IDs; empty for episodic
 	ACL            AclTier
 	Status         Status
+	Type           RecordType
 	BaseConfidence float64
+	CallerTSMeta   int64 // persisted caller claim, never ordering truth
+	Payload        map[string]string
+}
+
+// Validate checks a stored record's structural invariants.
+func (r Record) Validate() error {
+	if strings.TrimSpace(r.ID) == "" {
+		return E(CodeInvalidRecord, "record id is required")
+	}
+	in := InputRecord{
+		Subject:        r.Subject,
+		Predicate:      r.Predicate,
+		Object:         r.Object,
+		ValidTime:      r.ValidTime,
+		Provenance:     r.Provenance,
+		ACL:            r.ACL,
+		BaseConfidence: r.BaseConfidence,
+		CallerTSMeta:   r.CallerTSMeta,
+		Payload:        r.Payload,
+	}
+	if err := in.Validate(); err != nil {
+		return err
+	}
+	if !r.Txn.WellFormed() {
+		return E(CodeInvalidRecord, "txn interval must satisfy 0 <= from < to")
+	}
+	if !r.Status.WellFormed() {
+		return E(CodeInvalidRecord, "unknown status")
+	}
+	if !r.Type.WellFormed() {
+		return E(CodeInvalidRecord, "unknown record type")
+	}
+	if !r.Type.Derived() && len(r.DerivedFrom) != 0 {
+		return E(CodeInvalidRecord, "episodic records carry no derived-from links")
+	}
+	for _, id := range r.DerivedFrom {
+		if strings.TrimSpace(id) == "" {
+			return E(CodeInvalidRecord, "derived-from holds a blank id")
+		}
+	}
+	return nil
 }
 
 // FeedbackKind distinguishes confidence-only updates (FEEDBACK events).
