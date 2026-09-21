@@ -1,0 +1,191 @@
+// proto/engram.proto is the wire contract for Engram v2 (P0).
+//
+// The RPC layer (P5) serves these 7 operations over a Unix domain
+// socket via gRPC. The core maps wire messages onto the internal
+// domain types in internal/rpc (never the reverse), so the transport
+// can evolve without touching the Truth Store or Processing Layer.
+//
+// Conventions (locked across SRS v1.3 / DESIGN v1.1 / TECH-STACK):
+//   - transaction-time is server-assigned at commit; callers must not
+//     send it. Caller timestamps arrive as caller_ts_meta only.
+//   - verdicts: SKIP | INSERT | MERGE | UPDATE | RESTRENGTHEN | STAGED.
+//   - ACL tiers: low | user | system (low enters STAGED quarantine).
+//   - resolve verdicts: keep-a | keep-b | merge (merge appends new).
+//   - consolidate tick: int64 monotonic counter, host-incremented.
+//   - Inspect is deferred post-v1 and intentionally absent here.
+syntax = "proto3";
+
+package engram.v1;
+
+option go_package = "engram/proto/engrampb";
+
+// Verdict is the write-gate outcome for emit (SRS FR4).
+enum Verdict {
+  VERDICT_UNSPECIFIED = 0;
+  SKIP = 1;
+  INSERT = 2;
+  MERGE = 3;
+  UPDATE = 4;
+  RESTRENGTHEN = 5;
+  STAGED = 6;
+}
+
+// Status is the record lifecycle state (SRS FR3 / DESIGN §1).
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  ACTIVE = 1;
+  SCHEDULED = 2;
+  BOTH = 3;
+  TOMBSTONED = 4;
+}
+
+// AclTier is the trust/access level (P0 locked).
+enum AclTier {
+  ACL_TIER_UNSPECIFIED = 0;
+  LOW = 1;
+  USER = 2;
+  SYSTEM = 3;
+}
+
+// ResolveVerdict resolves a Both-state pair (P0 locked).
+enum ResolveVerdict {
+  RESOLVE_VERDICT_UNSPECIFIED = 0;
+  KEEP_A = 1;
+  KEEP_B = 2;
+  MERGE = 3;
+}
+
+// Axis selects the bi-temporal query axis (NFR8).
+enum Axis {
+  AXIS_UNSPECIFIED = 0;
+  VALID = 1;
+  TRANSACTION = 2;
+}
+
+// Error codes for fail-closed responses.
+enum Code {
+  CODE_UNSPECIFIED = 0;
+  NOT_FOUND = 1;
+  FLOOR_MISS = 2;
+  RATE_LIMITED = 3;
+  CORRUPT_INDEX = 4;
+  INVALID_RECORD = 5;
+  CONFLICT = 6;
+}
+
+// Record is the caller-supplied shape for emit (SRS §1.3): structured
+// subject/predicate/object plus metadata. No id, no transaction-time.
+message InputRecord {
+  string subject = 1;
+  string predicate = 2;
+  string object = 3;
+  int64 valid_from = 4; // unix-nanos, inclusive
+  int64 valid_to = 5;   // unix-nanos, exclusive; math.MaxInt64 = open
+  string source = 6;
+  string session = 7;
+  AclTier acl = 8;
+  double base_confidence = 9; // [0,1]
+  int64 caller_ts_meta = 10;  // metadata only, never ordering truth
+}
+
+// StoredRecord is a committed truth record (SRS FR3).
+message StoredRecord {
+  string id = 1; // generated, immutable
+  string subject = 2;
+  string predicate = 3;
+  string object = 4;
+  int64 valid_from = 5;
+  int64 valid_to = 6;
+  int64 txn_from = 7; // server-assigned at commit
+  int64 txn_to = 8;   // server-assigned; MaxInt64 = open
+  string source = 9;
+  string session = 10;
+  AclTier acl = 11;
+  Status status = 12;
+  double base_confidence = 13;
+}
+
+message EmitRequest {
+  InputRecord record = 1;
+}
+
+message EmitResponse {
+  Verdict verdict = 1;
+  string id = 2;
+}
+
+message RecallRequest {
+  repeated string terms = 1;
+  int32 budget = 2;
+  string acl_context = 3; // caller tier for pre-filter (FR13)
+  int64 latency_budget_ms = 4; // exposed parameter, 0 = default
+}
+
+message RecallResponse {
+  repeated StoredRecord records = 1;
+  bool abstain = 2; // true: nothing cleared the threshold (FR7)
+}
+
+message CorrectRequest {
+  string hint = 1; // similarity-floor locator, never always-argmax
+  InputRecord correction = 2;
+}
+
+message CorrectResponse {
+  string id = 1;
+  Verdict verdict = 2;
+}
+
+message AttestRequest {
+  string id = 1; // from a prior recall result set
+  bool confirm = 2; // true = confirm, false = disconfirm
+  string source = 3;
+  string session = 4; // must differ from write cluster to promote
+}
+
+message AttestResponse {
+  double new_confidence = 1;
+  bool promoted = 2;
+}
+
+message ResolveRequest {
+  string id_a = 1;
+  string id_b = 2;
+  ResolveVerdict verdict = 3;
+}
+
+message ResolveResponse {
+  string id = 1; // surviving or merged record id
+}
+
+message AsOfRequest {
+  repeated string terms = 1;
+  int64 t = 2; // unix-nanos
+  Axis axis = 3;
+  int32 budget = 4;
+}
+
+message AsOfResponse {
+  repeated StoredRecord records = 1;
+}
+
+message ConsolidateRequest {
+  int64 tick = 1; // monotonic counter, host-incremented
+}
+
+message ConsolidateResponse {
+  int64 tick = 1;
+  int32 consolidated = 2;
+  int32 pruned = 3;
+}
+
+// Engram is the 7-operation v1 surface (SRS §3, DESIGN §9).
+service Engram {
+  rpc Emit(EmitRequest) returns (EmitResponse);
+  rpc Recall(RecallRequest) returns (RecallResponse);
+  rpc Correct(CorrectRequest) returns (CorrectResponse);
+  rpc Attest(AttestRequest) returns (AttestResponse);
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+  rpc AsOf(AsOfRequest) returns (AsOfResponse);
+  rpc Consolidate(ConsolidateRequest) returns (ConsolidateResponse);
+}
