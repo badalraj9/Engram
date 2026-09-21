@@ -101,7 +101,7 @@ This is the layer with the most sub-components — breaking it out explicitly si
 | **Session Clusterer** | Groups pulses by session before noisy-OR combination (FR9's ordering requirement) | Pure Go, keyed lookup against provenance fields already on each record |
 
 ### 2.5 Truth Store (the append-only layer)
-**What it does:** the authoritative record log — id, bi-temporal fields, provenance, ACL, status, base confidence (FR3), append-only (FR17).
+**What it does:** the authoritative record log — id, bi-temporal fields, provenance, derived-from links, ACL, status, type, base confidence, caller meta, opaque payload (FR3), append-only (FR17).
 
 **Stack:**
 - **Embedded KV engine: BadgerDB.** Decision over Pebble and over SQLite:

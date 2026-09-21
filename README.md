@@ -47,4 +47,4 @@ P0 provides contracts only: `proto/engram.proto` (7 ops), `internal/rpc` (domain
 
 ## License
 
-Apache-2.0 — `LICENSE` lands with the first public push; attributions live in `NOTICE`.
+Apache-2.0 — see `LICENSE`; attributions live in `NOTICE`.

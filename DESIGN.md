@@ -20,8 +20,12 @@
 | valid-time interval `[t-, t+)` | when true in the world |
 | transaction-time interval `[k-, k+)` | when Engram learned it — **assigned server-side at commit, never caller-supplied** (this is also the mechanism that makes crash-retry safe — see §4) |
 | provenance | source + session id(s), as id-refs (supports session-clustering for FR9) |
+| derived_from | parent record IDs for SUMMARY/SEMANTIC records; empty for EPISODIC (rollback + re-derive target) |
 | ACL tier | trust/access level |
 | status | enum above |
+| type | `EPISODIC \| SUMMARY \| SEMANTIC` — one store, not a tier; gate never derives from derived records |
+| caller_ts_meta | persisted caller timestamp claim; metadata only, never ordering truth |
+| payload | opaque string map for non-assertive metadata only (raw excerpts, links); the gate never branches on it — MERGE unions it monotonically |
 | base confidence | starting value at write time |
 
 **Confidence is not a mutable field. [RATIFIED — resolves a real FR3/FR17 conflict.]** FR3 originally implied confidence lives as record state; FR17 forbids in-place mutation. Resolution: confidence is *computed at read time* — base confidence plus all FEEDBACK events (from `attest`/`correct`) appended against this record's id, replayed lazily, same pattern as decay. This preserves `as_of` auditability (historical confidence is reconstructable) and compaction folds old events into snapshots without losing that property.
@@ -104,6 +108,8 @@ RESTRENGTHEN - matches, IDENTICAL (subject, predicate, object) -> bump strength/
 1. **Consolidation** — clusters by session+subject co-occurrence from the index (no embeddings). Synthesizes derived SUM/SEM records via **deterministic template composition from record fields — never LLM generation.** This boundary is the one most at risk of quietly eroding over time (template extraction "sounds" close enough to generation that a future contributor could reach for a model here) and is stated explicitly for that reason. Acceptance gated by probe-distortion test: `D_probe <= D_max`.
 2. **Pruning** — runs *after* consolidation completes in the same tick, not as an independently-triggered job. This ordering is what prevents pruning from evicting a record an in-flight consolidation cluster is still reading — cheaper than a lock, and the reason pruning isn't its own separate trigger. Eviction is economics-based: marginal retrieval value vs. marginal dilution cost (FR11) — no fixed-count or capacity-bound cutoff (an earlier draft mistakenly applied a Hopfield-style capacity bound, P_crit ~ 0.138*N, here; that bound governs an attractor weight matrix, not a flat indexed table, and does not apply to this layer).
 3. **Calibration** — refreshes FR16's ablation-probe-derived thresholds (abstention, acceptance, eviction) on a rolling window.
+
+**Chained derivation refused (deliberate trade-off):** consolidation derives from episodic records only, never from SUMMARY/SEMANTIC outputs — this blocks summary-of-summary drift at the cost of consolidation work growing with the full episode corpus. If that becomes a scaling wall, the escape hatch is chained derivation with provenance re-verification (derive only from summaries whose DerivedFrom episodes are all still live).
 
 **Consolidation vs. correction, concurrency:** resolved for free by Badger's MVCC snapshot isolation — consolidation reads a consistent snapshot as of tick-start; a correction landing mid-tick writes a new version that consolidation's already-open snapshot simply doesn't see. No lock required. The corrected version is naturally picked up by the next tick. **This is the first place Badger's snapshot isolation is credited as a load-bearing dependency, not just an implementation detail** — noted here explicitly since it wasn't named as a reason in the original tech-stack acceptance.
 
