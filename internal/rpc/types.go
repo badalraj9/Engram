@@ -169,8 +169,9 @@ func (e *Error) Error() string { return string(e.Code) + ": " + e.Msg }
 // E builds a coded domain error.
 func E(code Code, msg string) error { return &Error{Code: code, Msg: msg} }
 
-// Interval is a half-open [From, To) range over unix-nanos.
-// To == OpenEnd means unbounded (still current).
+// Interval is a half-open [From, To) range over int64 ticks — unix-nanos
+// on the valid axis (caller's world-time assertion), commit sequence on
+// the transaction axis (server-assigned). To == OpenEnd means unbounded.
 type Interval struct {
 	From int64
 	To   int64
