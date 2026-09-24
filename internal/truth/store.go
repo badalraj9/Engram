@@ -1003,6 +1003,24 @@ func (c *cursor) u8() byte {
 	return v
 }
 
+// count reads a repetition count, failing closed when the count
+// exceeds the remaining bytes: every element consumes at least one
+// byte (its length prefix), so a larger count is corrupt by
+// construction. Without this bound a corrupt value drives a
+// multi-billion-iteration loop (slice OOM, not an error) — found by
+// FuzzDecodeRecord (H6), fixed here rather than at any call site.
+func (c *cursor) count() uint64 {
+	n := c.uvarint()
+	if c.err != nil {
+		return 0
+	}
+	if n > uint64(len(c.b)) {
+		c.err = rpc.E(rpc.CodeCorruptIndex, "impossible repetition count")
+		return 0
+	}
+	return n
+}
+
 func (c *cursor) f64() float64 {
 	return math.Float64frombits(uint64(c.i64()))
 }
@@ -1077,7 +1095,7 @@ func decodeRecord(val []byte) (rpc.Record, error) {
 	r.Txn.To = c.i64()
 	r.Provenance.Source = c.str()
 	r.Provenance.Session = c.str()
-	for i, n := 0, c.uvarint(); uint64(i) < n; i++ {
+	for i, n := 0, c.count(); uint64(i) < n; i++ {
 		r.DerivedFrom = append(r.DerivedFrom, c.str())
 	}
 	acl, err := decodeACL(c.u8())
@@ -1098,7 +1116,7 @@ func decodeRecord(val []byte) (rpc.Record, error) {
 	r.BaseConfidence = c.f64()
 	r.CallerTSMeta = c.i64()
 	r.Payload = make(map[string]string)
-	for i, n := 0, c.uvarint(); uint64(i) < n; i++ {
+	for i, n := 0, c.count(); uint64(i) < n; i++ {
 		k := c.str()
 		v := c.str()
 		if c.err != nil {
