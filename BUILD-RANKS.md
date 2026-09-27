@@ -3,11 +3,12 @@
 Tiers: SSS > S > A > B > C > D > E. Ranks reflect v1 correctness impact, not build sequence.
 
 ## SSS — loss is total loss
-### `internal/truth/` (4)
+### `internal/truth/` (5)
 - store.go
 - keys.go
 - compaction.go
 - store_iface.go
+- quarantine.go
 
 ## S — wrong verdict corrupts all
 ### `internal/processing/` (8)

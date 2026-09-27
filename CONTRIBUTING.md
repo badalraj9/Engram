@@ -23,14 +23,10 @@ explicit edit) and get it acknowledged — otherwise the PR will be closed.
 
 ## Try building — open phases
 
-P0 (contracts) is done. Claim any slice of the next open phase in `BUILD-PLAN.md`:
+P0–P4 are done (built, hardened, green). Claim any slice of the next open phase in `BUILD-PLAN.md`:
 
-- **P1 truth** — Badger-backed log, key layout, replay (`store_iface.go` is your spec; M8a is your exit test).
-- **P2 write** — five-way gate, MinHash MERGE-band matcher, session clusterer.
-- **P3 find** — inverted index + rebuild procedure.
-- **P4 read** — ranker, abstention gate, `resolve()`.
-- **P5 serve** — gRPC/UDS wiring, serialized tick.
-- **P6 harden** — M1–M8 measurement gates.
+- **P5 serve** — gRPC/UDS wiring, serialized tick, FR16 calibration, feedback-by-ID secondary (bench-required: 111.5ms recall @100K), P5 emergency repair op.
+- **P6 harden** — M1–M8 measurement gates + fuzzy-lane worst-case strategy (open risk, see `BUILD-PLAN.md` P4 `{HARDENED}`).
 
 Open an issue naming the file(s) you want (e.g. `internal/index/rebuild.go`) and
 we'll mark it claimed. Small, finished slices beat large drafts.

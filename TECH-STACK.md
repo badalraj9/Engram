@@ -127,6 +127,8 @@ This is the layer with the most sub-components — breaking it out explicitly si
 | **Postings-list compression / set ops** | `github.com/RoaringBitmap/roaring` | Needed for fast intersection when chaining multi-hop lookups and for visited-tracking during any bounded traversal |
 | **MinHash/LSH tables** (fuzzy dedup candidate generation) | Custom Go, small, purpose-built to the exact matching rule in FR4 | No general-purpose LSH library needed given the narrow v1 scope |
 
+{NEW AFTER CONSIDERATION 2026-09-24 — P3 implements the postings slot as stdlib-only sorted sets (`internal/index/roaring.go`: `Set` with `Add/Intersect/Union/Clone/Sorted` — the filename keeps the slot's name, the method shapes are the seam a bitmap backend would implement). Per-key candidate sets are a handful of versions, so a bitmap dependency is unjustified weight (stdlib-first frozen rule); `go.mod` carries no roaring dependency. Revisit iff a P6 bench proves set-op cost load-bearing.}
+
 ### 2.7 Dynamics Layer (VSA working bundle + cleanup)
 **What it does:** the transient, per-query working memory — activation, superposition, decay-as-damping, cleanup/decode.
 
