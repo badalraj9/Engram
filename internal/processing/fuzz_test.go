@@ -1,6 +1,7 @@
 package processing
 
 import (
+	"math"
 	"testing"
 )
 
@@ -37,6 +38,30 @@ func FuzzJaccardInvariants(f *testing.F) {
 		}
 		if self := TrigramJaccard(a, a); self != 1 {
 			t.Fatalf("reflexivity: (%q,%q)=%v, want 1", a, a, self)
+		}
+	})
+}
+
+// FuzzRankScoreInvariants (P4 hardening) pins the score contract
+// over arbitrary inputs: never NaN/Inf, never negative, monotone
+// non-decreasing in hits. Guards inside RankScore (clamps,
+// fallbacks) are what make this hold for hostile floats.
+func FuzzRankScoreInvariants(f *testing.F) {
+	f.Add(2, 1.0, 1.0, 3, 0.5)
+	f.Add(0, 1.0, 1.0, 0, 0.5)
+	f.Add(5, 0.0, 1.5, 100, 2.0)
+	f.Fuzz(func(t *testing.T, hits int, r, trust float64, corr int, beta float64) {
+		s := RankScore(hits, r, trust, corr, beta)
+		if math.IsNaN(s) || math.IsInf(s, 0) {
+			t.Fatalf("non-finite score: RankScore(%d,%v,%v,%d,%v)=%v", hits, r, trust, corr, beta, s)
+		}
+		if s < 0 {
+			t.Fatalf("negative score: RankScore(%d,%v,%v,%d,%v)=%v", hits, r, trust, corr, beta, s)
+		}
+		if hits >= 0 && hits < 1<<30 {
+			if up := RankScore(hits+1, r, trust, corr, beta); up < s {
+				t.Fatalf("hits-monotonicity: %v then %v", s, up)
+			}
 		}
 	})
 }

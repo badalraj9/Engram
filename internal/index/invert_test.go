@@ -163,3 +163,38 @@ func TestIDs_Deterministic(t *testing.T) {
 		t.Fatalf("want [a b] sorted, got %v", got)
 	}
 }
+
+// TestRetire_CloseHalf pins supersede hygiene: retiring the closed
+// version removes it from every lane (exact, terms, byID, count)
+// while the surviving version stays fully findable. Double-retire
+// and retire-missing are no-ops (replay-safe).
+func TestRetire_CloseHalf(t *testing.T) {
+	var x Index
+	old := irec("old", "pump", "runs", "yes")
+	new := irec("new", "pump", "runs", "no")
+	x.Add(old, nil)
+	x.Add(new, nil)
+	x.Retire("old")
+	if _, ok := x.ByID("old"); ok {
+		t.Fatal("retired version must leave byID")
+	}
+	for _, r := range x.Exact("pump", "runs") {
+		if r.ID == "old" {
+			t.Fatal("retired version must leave the exact set")
+		}
+	}
+	if s := x.Terms("pump"); s.Contains("old") {
+		t.Fatal("retired version must leave term postings")
+	}
+	if x.Len() != 1 {
+		t.Fatalf("want Len 1, got %d", x.Len())
+	}
+	if got := x.Exact("pump", "runs"); len(got) != 1 || got[0].ID != "new" {
+		t.Fatal("surviving version must stay findable")
+	}
+	x.Retire("old")
+	x.Retire("missing")
+	if x.Len() != 1 {
+		t.Fatal("double-retire and retire-missing must be no-ops")
+	}
+}

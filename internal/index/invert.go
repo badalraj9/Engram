@@ -123,6 +123,54 @@ func (x *Index) Add(rec rpc.Record, staged map[string]bool) bool {
 	return true
 }
 
+// Retire drops one record version from the find structure — the
+// close half of supersede/restatus on the live-write path (the
+// committed new version is Added separately). Without it the
+// serving index accumulates stale ACTIVE copies: recall stays
+// correct (store-verify rejects them) but the index grows with
+// history instead of live state (NFR4) and every recall drags dead
+// candidates through point Gets. Found by P4 concurrent-torture
+// (serving 141 vs rebuild 1); added here, not in intake, because
+// postings removal owns the tokenization this file built.
+// Idempotent: absent IDs are a no-op (replay-safe).
+func (x *Index) Retire(id string) {
+	rec, ok := x.byID[id]
+	if !ok {
+		return
+	}
+	delete(x.byID, id)
+	key := processing.Key(rec.Subject, rec.Predicate)
+	kept := make([]rpc.Record, 0, len(x.exact[key]))
+	for _, r := range x.exact[key] {
+		if r.ID != id {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == 0 {
+		delete(x.exact, key)
+	} else {
+		x.exact[key] = kept
+	}
+	for _, field := range []string{rec.Subject, rec.Predicate, rec.Object} {
+		for _, tok := range tokenize(processing.Normalize(field)) {
+			if s, ok := x.terms[tok]; ok {
+				delete(s, id)
+				if len(s) == 0 {
+					delete(x.terms, tok)
+				}
+			}
+		}
+	}
+	for g := range processing.Trigrams(rec.Subject) {
+		if s, ok := x.trigrams[g]; ok {
+			delete(s, id)
+			if len(s) == 0 {
+				delete(x.trigrams, g)
+			}
+		}
+	}
+}
+
 // Exact returns the FULL live-candidate set under one normalized
 // (subject,predicate) key — every version, never top-1. Empty (nil)
 // when no live candidate exists. Records are copies from Add time.
