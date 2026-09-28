@@ -2,30 +2,55 @@
 
 **Memory that knows what it knows.**
 
-Engram is a next-gen memory substrate for AI agents — persistent, truth-aware recall with explicit `ABSTAIN` instead of hallucinated guesses, bi-temporal audit (`as_of` any date), and forgetting as a default. All at infrastructure speed with zero LLM calls and zero vector DB.
+Engram is a memory system for AI agents that behaves like a good
+witness: it remembers what happened, says when something changed its
+mind, admits when it doesn't know, and forgets what's no longer worth
+keeping. No model calls, no vector database — one small Go service
+over a local socket, and every answer traceable to its source.
 
-> Status: P0–P4 built and hardened (truth log, write gate, rebuildable index, read path with ranker + ABSTAIN + resolve + quarantine). Full tree `build + vet + fmt + test` green. Next: P5 serve (UDS/gRPC daemon, serialized tick). See docs before contributing.
+## What it does, in plain words
 
-## Why not RAG / vector memory
+- **Remembers truthfully.** Facts go in as structured records. When
+  the world changes, the old version is closed and a new one appended
+  — history is never overwritten, so "what was true in June?" always
+  has an answer.
+- **Says "I don't know."** A query returns ranked, currently-true
+  facts — or an explicit `ABSTAIN` when nothing clears the bar.
+  Guessing is not a feature.
+- **Forgets on principle.** Unused, low-value facts decay and are
+  pruned by economics, not by cleanup scripts. Untrusted claims wait
+  in quarantine until a second, independent source backs them.
+- **Settles arguments.** Contradictions with no clear winner sit in
+  an explicit both-state until ruled on — never silently overwritten.
 
-| | RAG / vector similarity | LLM-mediated (mem0-class) | Engram |
-|---|---|---|---|
-| Returns | topically-similar chunks | model-ranked text | currently-true ranked facts or explicit `ABSTAIN` |
-| Truth tracking | none | prompt-based | bi-temporal records + supersede, never overwrite |
-| Confidence | cosine score | opaque | noisy-OR + session clustering, config-loaded thresholds (FR16 calibration lands in P5) |
-| Forgetting | manual cleanup | manual cleanup | decay on read + quarantine; economics-based pruning lands in P5, validated at the M-gates in P6 |
-| Dependencies | vector DB | LLM in the loop | embedded KV only (BadgerDB), no model calls |
-| Audit | no | no | every fact traceable to source, session, time |
+Seven operations: `emit`, `recall`, `correct`, `attest`, `resolve`,
+`as_of`, `consolidate`. The details live in the docs, not here.
+
+## Status
+
+> P0–P5 built on branch `v1/p0-p4`: truth log, write gate,
+> rebuildable index, read path (ranker + abstain + resolve +
+> quarantine), UDS/gRPC daemon with serialized tick. Full tree
+> `build + vet + fmt + test` green. Next: P6 (measurement gates,
+> feedback lookup, `cmd/` + client).
+
+Honest numbers (i5-12450H): recall 10ms at 10K facts, 111.5ms at
+100K — linear, so the million-fact lookup upgrade is already scoped
+for P6. Nothing here claims scale it hasn't measured.
 
 ## Docs (read in this order)
 
-- `SRS-engram-v2.md` — what/why (requirements, wedge, measurement gates)
-- `DESIGN.md` — how (record schema, write gate, ranker, seams)
-- `TECH-STACK.md` — with-what (BadgerDB, gRPC/UDS, pure-Go processing)
-- `BUILD-PLAN.md` — testable build phases P0–P6
-- `BUILD-RANKS.md` — file importance tiers (SSS → E)
+All design docs live in `docs/`:
 
-## Quickstart (P0–P4)
+- `docs/SRS-engram-v2.md` — what and why (requirements, wedge, gates)
+- `docs/DESIGN.md` — how (records, write gate, ranker, seams)
+- `docs/TECH-STACK.md` — with what (BadgerDB, gRPC/UDS, pure Go)
+- `docs/BUILD-PLAN.md` — build phases P0–P6, with per-phase records
+- `docs/BUILD-RANKS.md` — file importance tiers (SSS → E)
+- `docs/CONTRIBUTING.md` — how to contribute (docs first, tests prove clauses)
+- `docs/IDEAS.md` — parking lot: explicitly not decisions
+
+## Try it
 
 ```sh
 go build ./...
@@ -33,22 +58,26 @@ go vet ./...
 go test ./...
 ```
 
-Shipped: `proto/engram.proto` (7 ops), `internal/rpc` (domain types),
-`internal/truth` (append-only Badger log + quarantine set), `internal/config` (TOML + env),
-`internal/processing` (five-way gate, matcher, confidence, ranker, abstention, resolve),
-`internal/index` (rebuildable inverted + trigram find layer),
-`internal/intake` (emit/correct/attest/resolve execution + FR15 rate limit),
-`internal/query` (recall with ACL pre-filter, `as_of`, M6 suite).
+That's the whole suite — no services to start, no keys, no network.
+(The runnable daemon binary and client stubs land in P6.)
+
+## The rules it won't break
+
+No model in the loop. No vector database. Records are never edited
+in place. Nothing runs on a hidden schedule — maintenance happens
+only when the host asks for it. Nothing is confirmed before it's
+durable. These aren't aspirations; they're build-failing constraints,
+and every phase's tests prove them.
 
 ## Roadmap
 
 - [x] P0 contracts — compile gate
 - [x] P1 truth — append-only log + replay (M8a) + quarantine set
 - [x] P2 write — five-way gate, confidence, ACL
-- [x] P3 find — rebuildable index (stdlib postings behind a bitmap seam)
+- [x] P3 find — rebuildable index
 - [x] P4 read — ranker, abstention, resolve (M6)
-- [ ] P5 serve — UDS/gRPC daemon, serialized tick (owns FR16 calibration + feedback-by-ID secondary, required by bench: 111.5ms recall @100K)
-- [ ] P6 harden — full gates M1–M8 (incl. fuzzy-lane worst-case strategy, open risk)
+- [x] P5 serve — UDS/gRPC daemon, serialized tick, calibration refresh, repair op
+- [ ] P6 harden — measurement gates, feedback lookup, `cmd/` + client
 
 ## License
 

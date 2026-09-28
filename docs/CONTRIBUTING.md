@@ -23,10 +23,9 @@ explicit edit) and get it acknowledged — otherwise the PR will be closed.
 
 ## Try building — open phases
 
-P0–P4 are done (built, hardened, green). Claim any slice of the next open phase in `BUILD-PLAN.md`:
+P0–P5 are done (built, green). Claim any slice of the next open phase in `BUILD-PLAN.md`:
 
-- **P5 serve** — gRPC/UDS wiring, serialized tick, FR16 calibration, feedback-by-ID secondary (bench-required: 111.5ms recall @100K), P5 emergency repair op.
-- **P6 harden** — M1–M8 measurement gates + fuzzy-lane worst-case strategy (open risk, see `BUILD-PLAN.md` P4 `{HARDENED}`).
+- **P6 harden** — M1–M5/M7/M8b gates, feedback-by-ID secondary (bench-required: 111.5ms recall @100K), fuzzy-lane worst-case strategy (open risk, see `BUILD-PLAN.md` P4 `{HARDENED}`), `cmd/engramd`, thin client stub, trust-floor pass if still open.
 
 Open an issue naming the file(s) you want (e.g. `internal/index/rebuild.go`) and
 we'll mark it claimed. Small, finished slices beat large drafts.
