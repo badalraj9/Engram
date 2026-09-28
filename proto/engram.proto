@@ -48,11 +48,16 @@ enum AclTier {
 }
 
 // ResolveVerdict resolves a Both-state pair (P0 locked).
+// {NEW AFTER CONSIDERATION 2026-09-28 — wire name MERGE → MERGE_PAIR:
+// proto enum values share package scope (C++ rules); Verdict.MERGE
+// already claims MERGE in engram.v1, so protoc rejects the file.
+// Number (3) and semantics (merge appends new) unchanged —
+// transport-only rename, core domain keeps ResolveMerge="merge".}
 enum ResolveVerdict {
   RESOLVE_VERDICT_UNSPECIFIED = 0;
   KEEP_A = 1;
   KEEP_B = 2;
-  MERGE = 3;
+  MERGE_PAIR = 3;
 }
 
 // RecordType distinguishes episodic observations from derived records.
@@ -126,6 +131,13 @@ message EmitRequest {
 message EmitResponse {
   Verdict verdict = 1;
   string id = 2;
+  // {NEW AFTER CONSIDERATION 2026-09-28 — flagged_id carries the
+  // flagged target's version on the tier-blocked path (P4 decision:
+  // Restatus mints a new ID; without returning it the pair's other
+  // half is unaddressable over RPC). Transport-only evolution: core
+  // domain already returns FlaggedID (intake/emit.go); old clients
+  // ignore field 3 by protobuf forward-compat. Empty otherwise.}
+  string flagged_id = 3;
 }
 
 message RecallRequest {

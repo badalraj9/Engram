@@ -37,3 +37,12 @@ func RunValueLogGC(db *badger.DB) error {
 	}
 	return nil
 }
+
+// RunValueLogGC reclaims the store's value-log space under the
+// single-writer lock. Additive tick helper — the TruthStore interface
+// is P0-closed and stays untouched.
+func (s *Store) RunValueLogGC() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return RunValueLogGC(s.db)
+}
