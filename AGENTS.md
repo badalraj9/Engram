@@ -74,7 +74,13 @@ The owner directs; the agent executes. Never the reverse.
 - Toolchain limit seen 2026-09-24: `-race` needs cgo and this machine's cgo has no 64-bit backend (`cc1.exe: sorry, unimplemented: 64-bit mode not compiled in`) — race leg unrunnable here, not a code signal. Revisit on a machine with working gcc.
 - Fuzz lesson seen 2026-09-24: run memory-hungry fuzz targets solo, never parallel — a parallel OOM produces collateral "failing inputs" in innocent targets (empty-seed bytes that pass in isolation). Confirm any fuzz failure solo before fixing.
 
-## 8. Session handoff — P6 entry context (state as of 2026-09-28)
+## 8. Session handoff — P6 BUILT (state as of 2026-09-29)
+
+[SUPERSEDED 2026-09-29: P6-entry handoff below replaced — P6 built per-file-plan-verbatim, full tree green 11/11, uncommitted. Docs synced (BUILD-PLAN P6 BUILT, README/CONTRIBUTING P6-done). One re-proposed deferral: proto widening needs the protoc toolchain (absent here) — wire frozen, tagged in BUILD-PLAN. Old text kept for cross-reference.]
+
+P0–P6 built on `v1/p0-p5` (P6 adds `internal/truth/feedback_idx.go`, `internal/dynamics/*`, `cmd/engramd`, `client/go`, gates M1–M5/M7/M8b, both-sides caps). Full tree `build+vet+fmt+test` green incl. 1M M7 leg (~38s; `-short` skips it). Next: Q2 dogfood through Q1 (`engramd --both`, then real sessions); OpenCode waits. Commit held until dogfood validation ("perfect"), not after P6 — P6 + Q1 ride uncommitted till then. Nothing else open.
+
+### Prior handoff (P6 entry, 2026-09-28, superseded — see above)
 
 [SUPERSEDED 2026-09-28: P5-entry handoff below replaced — P5 built, tested, doc-synced, uncommitted on `v1/p0-p4`. Docs moved to `docs/`. Old text kept for cross-reference.]
 

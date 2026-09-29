@@ -23,9 +23,9 @@ explicit edit) and get it acknowledged — otherwise the PR will be closed.
 
 ## Try building — open phases
 
-P0–P5 are done (built, green). Claim any slice of the next open phase in `BUILD-PLAN.md`:
+P0–P6 are done (built, green — v1 complete, see `BUILD-PLAN.md` P6 `{BUILT}`). Next: dogfood (UC5) decides what v1.1 earns; the parked candidate lane lives in `IDEAS.md` §4.
 
-- **P6 harden** — M1–M5/M7/M8b gates, feedback-by-ID secondary (bench-required: 111.5ms recall @100K), fuzzy-lane worst-case strategy (open risk, see `BUILD-PLAN.md` P4 `{HARDENED}`), `cmd/engramd`, thin client stub, trust-floor pass if still open.
+- ~~**P6 harden** — M1–M5/M7/M8b gates, feedback-by-ID secondary (bench-required: 111.5ms recall @100K), fuzzy-lane worst-case strategy (open risk, see `BUILD-PLAN.md` P4 `{HARDENED}`), `cmd/engramd`, thin client stub, trust-floor pass if still open.~~ [SUPERSEDED 2026-09-29: built — see `BUILD-PLAN.md` P6 `{BUILT}`; proto widening deferred for toolchain, wire frozen.]
 
 Open an issue naming the file(s) you want (e.g. `internal/index/rebuild.go`) and
 we'll mark it claimed. Small, finished slices beat large drafts.
