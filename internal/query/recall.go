@@ -73,8 +73,10 @@ type Result struct {
 // verified against the store's latest version (serving-index copies
 // go stale on supersede — same rule as intake's gather); staged
 // records filter as defense-in-depth beside index exclusion
-// (DESIGN §2: three readers). Feedback replays lazily per record
-// (FR17): strengths feed R_m, attest verdicts feed confidence.
+// (DESIGN §2: three readers). Feedback replays per record from the
+// P6 feedback-by-ID secondary (FR17, O(candidates) — never a
+// per-recall log scan): strengths feed R_m, attest verdicts feed
+// confidence.
 func Recall(idx *index.Index, store *truth.Store, spec Spec) (Result, error) {
 	if err := spec.Validate(); err != nil {
 		return Result{}, err
@@ -85,10 +87,6 @@ func Recall(idx *index.Index, store *truth.Store, spec Spec) (Result, error) {
 		return Result{}, err
 	}
 	now, err := store.TailOffset()
-	if err != nil {
-		return Result{}, err
-	}
-	fb, err := feedbackByID(store)
 	if err != nil {
 		return Result{}, err
 	}
@@ -109,8 +107,8 @@ func Recall(idx *index.Index, store *truth.Store, spec Spec) (Result, error) {
 		if hits == 0 {
 			continue
 		}
-		evs := fb[fresh.ID]
-		r := processing.Retrievability(int64(now), fresh.Txn.From, countStrength(evs))
+		evs := store.FeedbackFor(fresh.ID)
+		r := processing.Retrievability(int64(now), fresh.Txn.From, countStrength(fresh.Provenance, evs))
 		conf, corr := confidenceOf(fresh, evs)
 		score := processing.RankScore(hits, r, trustOf(fresh.ACL, spec), corr, spec.Beta)
 		scored = append(scored, processing.Scored{Record: fresh, Hits: hits, Score: score})
@@ -196,27 +194,17 @@ func visibleTo(r rpc.Record, caller rpc.AclTier) bool {
 	return processing.Rank(r.ACL) <= processing.Rank(caller)
 }
 
-// feedbackByID replays the log once into per-record feedback lists
-// (FR17 lazy replay at read — one scan, not one per candidate).
-func feedbackByID(store *truth.Store) (map[string][]rpc.FeedbackEvent, error) {
-	out := make(map[string][]rpc.FeedbackEvent)
-	err := store.Scan(0, func(ev truth.Event) error {
-		if ev.Kind != truth.EventFeedback {
-			return nil
-		}
-		id := ev.Feedback.RecordID
-		out[id] = append(out[id], ev.Feedback)
-		return nil
-	})
-	return out, err
-}
-
-// countStrength counts use-confirmations feeding R_m (strength is a
-// retrievability input, never a confidence term — confidence.go).
-func countStrength(evs []rpc.FeedbackEvent) int {
+// countStrength counts INDEPENDENT use-confirmations feeding R_m
+// (strength is a retrievability input, never a confidence term —
+// confidence.go). Self-authored strengths score nothing (the B1 rule:
+// author's conviction is already in base) — pre-fix logs may hold
+// self-confirm strengths, so the read filters rather than trusting
+// the write to have skipped them.
+func countStrength(self rpc.Provenance, evs []rpc.FeedbackEvent) int {
 	n := 0
 	for _, ev := range evs {
-		if ev.Kind == rpc.FeedbackStrength {
+		if ev.Kind == rpc.FeedbackStrength &&
+			processing.Independent(self, rpc.Provenance{Source: ev.Source, Session: ev.Session}) {
 			n++
 		}
 	}
@@ -226,7 +214,9 @@ func countStrength(evs []rpc.FeedbackEvent) int {
 // confidenceOf composes read-time confidence (DESIGN §1): base plus
 // witness clusters (provenance + non-disconfirming attesters —
 // intake's rule, shared: disconfirm contributes only its BKT drop).
-// corr is supporting-clusters-beyond-self, feeding FR6's log boost.
+// Self-confirms are discounted in the fold (DiscountSelf — recorded,
+// never scoring). corr is supporting-clusters-beyond-self, feeding
+// FR6's log boost.
 func confidenceOf(rec rpc.Record, evs []rpc.FeedbackEvent) (float64, int) {
 	provs := []rpc.Provenance{rec.Provenance}
 	for _, ev := range evs {
@@ -248,7 +238,7 @@ func confidenceOf(rec rpc.Record, evs []rpc.FeedbackEvent) (float64, int) {
 	for i := 1; i < len(clusters); i++ {
 		witnesses = append(witnesses, rec.BaseConfidence)
 	}
-	return processing.Score(rec.BaseConfidence, witnesses, evs), len(clusters) - 1
+	return processing.Score(rec.BaseConfidence, witnesses, processing.DiscountSelf(rec.Provenance, evs)), len(clusters) - 1
 }
 
 // trustOf maps a record tier to the injected weights. Unknown tiers

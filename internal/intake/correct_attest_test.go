@@ -62,7 +62,13 @@ func TestAttest_ConfirmDisconfirm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stage: %v", err)
 	}
-	// Self-attestation: same composite as the write — no promotion.
+	// Self-attestation: same composite as the write — no promotion, and
+	// (closed by dogfood 2026-09-29, B1) no scoring lift either: the
+	// confirm is recorded in the log but discounted in both folds, and
+	// no strength event ships. [SUPERSEDED 2026-09-29: this block
+	// previously asserted self-confirm lifts confidence above base —
+	// that assertion was the self-dealing lever (0.84→0.90 solo);
+	// author's conviction is already in base.]
 	conf1, promoted, err := e.Attest(staged.ID, true, "low-src", "s9")
 	if err != nil {
 		t.Fatalf("self-attest: %v", err)
@@ -70,8 +76,13 @@ func TestAttest_ConfirmDisconfirm(t *testing.T) {
 	if promoted {
 		t.Fatal("self-attestation must never promote")
 	}
-	if conf1 <= 0.5 {
-		t.Fatalf("confirm must lift confidence above base, got %v", conf1)
+	if conf1 != 0.5 {
+		t.Fatalf("self-confirm must score nothing (base 0.5), got %v", conf1)
+	}
+	for _, ev := range s.FeedbackFor(staged.ID) {
+		if ev.Kind == rpc.FeedbackStrength {
+			t.Fatal("self-confirm must ship no strength event")
+		}
 	}
 	// Independent confirm promotes.
 	conf2, promoted, err := e.Attest(staged.ID, true, "ops", "s2")

@@ -168,6 +168,26 @@ func TestCalibrate_Scale(t *testing.T) {
 	}
 }
 
+// TestCalibrate_SmallCorpusDefaults pins the dogfood-2026-09-29 guard:
+// below MinCalSamples the pass returns defaults — a handful of
+// uniformly-fresh values must never floor queries at their own
+// baseline (that blinded a live store after its first tick).
+func TestCalibrate_SmallCorpusDefaults(t *testing.T) {
+	e, s, _ := mopen(t)
+	for i := 0; i < MinCalSamples-1; i++ {
+		if _, err := e.Emit(minput(fmt.Sprintf("fresh%d", i), "p", "o", "s", "sess", rpc.ACLUser)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	th, err := Calibrate(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if th != Defaults() {
+		t.Fatalf("sub-sample corpus must yield defaults, got %+v", th)
+	}
+}
+
 // TestConsolidate_RejectPath pins the distortion gate: a 33-member
 // cluster with all-distinct objects exceeds SummaryMaxObjects, so
 // D_probe ≈ 0.52 > 0.5 accept — no summary ships.

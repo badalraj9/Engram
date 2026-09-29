@@ -58,6 +58,27 @@ func WeakestLink(ps ...float64) float64 {
 	return m
 }
 
+// DiscountSelf enforces the self-attestation scoring rule (FR9/FR14,
+// closed by dogfood 2026-09-29): a confirm from the version's own
+// author composite scores nothing — the author's conviction is already
+// in the base confidence, so counting it again is a self-dealing lever
+// (demonstrated live: 0.84 → 0.90 on solo confirms). The event stays in
+// the log (history is complete — this filters the in-memory fold,
+// never the record); disconfirms always apply (talking yourself down
+// is evidence); correct/strength kinds pass untouched (strength writes
+// are gated at execution, not here). Order preserved.
+func DiscountSelf(self rpc.Provenance, evs []rpc.FeedbackEvent) []rpc.FeedbackEvent {
+	out := evs[:0:0]
+	for _, ev := range evs {
+		if ev.Kind == rpc.FeedbackAttestConfirm &&
+			!Independent(self, rpc.Provenance{Source: ev.Source, Session: ev.Session}) {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 // AttestUpdate folds one attest verdict BKT-style (DESIGN §5, TECH
 // §2.1): confirm applies the gain plus a strength jump downstream
 // (P4 records FeedbackStrength alongside); disconfirm mirrors the

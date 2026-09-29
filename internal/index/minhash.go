@@ -1,6 +1,7 @@
 package index
 
 import (
+	"math"
 	"sort"
 
 	"engram/internal/processing"
@@ -19,22 +20,39 @@ import (
 // versions are included here and rejected by the gate (unproven
 // identity → INSERT, never UPDATE on fuzzy): generation overincludes,
 // the verdict layer decides. Deterministic ID order.
+//
+// P6 worst-case strategy (P4 open risk — fuzzy lane is O(trigram-union)
+// under near-duplicate corpora, and no top-N cap is possible because
+// full sets are gate-locked): count-prefilter with a PROVEN lower
+// bound. Jaccard >= F implies inter >= F*(|A|+|B|)/(1+F); with |B| >= 1
+// the per-query minimum inter >= ceil(F*(|A|+1)/(1+F)) is necessary —
+// any candidate below it cannot clear the floor, so skipping Jaccard
+// (and the byID touch) is complete by arithmetic, never by sampling.
+// Truly-near-duplicate corpora still pool large, correctly: those
+// candidates genuinely clear the band and the gate must see them.
 func (x *Index) Fuzzy(subject, predicate string) []rpc.Record {
 	inPred := processing.Normalize(predicate)
 	if inPred == "" {
 		return nil
 	}
 	inSub := processing.Normalize(subject)
-	// Candidate generation: union of trigram postings for the
+	inGrams := processing.Trigrams(subject)
+	// Candidate generation: count shared trigrams per ID over the
 	// incoming subject's grams. Short subjects (< TrigramN runes)
 	// yield one whole-string gram (processing.Trigrams) — rarely
 	// clearing the floor, erring toward INSERT over false MERGE.
-	var cand = make(Set)
-	for g := range processing.Trigrams(subject) {
-		cand.Union(x.trigrams[g])
+	counts := make(map[string]int)
+	for g := range inGrams {
+		for id := range x.trigrams[g] {
+			counts[id]++
+		}
 	}
+	minOverlap := minTrigramOverlap(len(inGrams))
 	var out []rpc.Record
-	for _, id := range cand.Sorted() {
+	for _, id := range sortedKeys(counts) {
+		if counts[id] < minOverlap {
+			continue // arithmetically cannot clear the floor
+		}
 		rec, ok := x.byID[id]
 		if !ok {
 			continue
@@ -50,6 +68,35 @@ func (x *Index) Fuzzy(subject, predicate string) []rpc.Record {
 		}
 		out = append(out, rec)
 	}
+	return out
+}
+
+// minTrigramOverlap is the P6 necessary-condition bound: Jaccard >= F
+// with union = |A|+|B|-inter gives inter >= F*(|A|+|B|)/(1+F). |B| >= 1
+// always (Trigrams never yields empty), so inter >= F*(|A|+1)/(1+F) is
+// necessary for any candidate. At F=0.25 this reduces to (|A|+1)/5, but
+// the computation reads the floor — recalibration moves the bound, not
+// the logic. Returns 1 minimum (short-subject single-gram case).
+func minTrigramOverlap(lenA int) int {
+	if lenA <= 1 {
+		return 1
+	}
+	f := processing.FuzzyMergeFloor
+	n := int(math.Ceil(f * float64(lenA+1) / (1 + f)))
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// sortedKeys orders count-map IDs deterministically (the Set.Sorted
+// discipline, for the map shape the counter needs).
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for id := range m {
+		out = append(out, id)
+	}
+	sort.Strings(out)
 	return out
 }
 

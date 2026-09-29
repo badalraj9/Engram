@@ -41,7 +41,17 @@ const (
 // versions born within [tail-CalWindow, tail) calibrate (NFR10:
 // recalibrated on a rolling window as data drifts). v1-fixed
 // provisional, same discipline as RecencyHalfLife.
+//
+// MinCalSamples is the smallest corpus the quantile probe trusts
+// (v1-fixed provisional). Below it the pass returns defaults: p25 of a
+// handful of uniformly-fresh values IS those values, so calibrating
+// would floor single-hit queries at their own baseline — total
+// blindness after the first tick (caught live by dogfood 2026-09-29:
+// 11 fresh facts → Abstain ≈ 1.0 → everything abstained, including a
+// fact that recalled fine pre-tick). Quartiles on anecdotes are noise;
+// the FR16 workload protocol replaces this probe when UC5 exists.
 const CalWindow = 100000
+const MinCalSamples = 30
 
 // Thresholds is FR16's single output serving three call sites.
 type Thresholds struct {
@@ -106,7 +116,7 @@ func calibrateAt(store *truth.Store, now int64) (Thresholds, error) {
 	if err != nil {
 		return Thresholds{}, err
 	}
-	if len(values) == 0 {
+	if len(values) < MinCalSamples {
 		return Defaults(), nil
 	}
 	sort.Float64s(values)

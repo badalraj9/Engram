@@ -233,9 +233,12 @@ func (e *Emitter) Resolve(aID, bID string, verdict rpc.ResolveVerdict, prov rpc.
 
 // Attest folds a verdict on a prior claim (FR18, DESIGN §5): id from
 // a prior recall's result set, binary verdict, no caller-supplied
-// weights. Confirm applies the BKT gain plus a strength jump
-// (confirmation is stronger evidence than mere use — two events);
-// disconfirm mirrors the BKT update without touching strength.
+// weights. An INDEPENDENT confirm applies the BKT gain plus a strength
+// jump (confirmation is stronger evidence than mere use — two events);
+// a SELF confirm is recorded but scores nothing — neither BKT nor
+// strength (author's conviction is already in base; dogfood 2026-09-29
+// closed the self-dealing lever). Disconfirm always applies its mirror
+// (talking yourself down is evidence) without touching strength.
 // Bypasses the gate entirely (TECH §2.2: gate input would corrupt
 // verdict counting). Promotion via confirm requires an INDEPENDENT
 // attester — self-attestation never promotes (FR14).
@@ -258,9 +261,10 @@ func (e *Emitter) Attest(id string, confirm bool, source, session string) (float
 	if !confirm {
 		kind = rpc.FeedbackAttestDisconfirm
 	}
+	self := !processing.Independent(rec.Provenance, attester)
 	evs := []rpc.FeedbackEvent{{RecordID: id, Kind: kind,
 		Source: source, Session: session, Tick: int64(tail)}}
-	if confirm {
+	if confirm && !self {
 		evs = append(evs, rpc.FeedbackEvent{RecordID: id, Kind: rpc.FeedbackStrength,
 			Source: source, Session: session, Tick: int64(tail)})
 	}
@@ -305,7 +309,8 @@ func (e *Emitter) Attest(id string, confirm bool, source, session string) (float
 // only its BKT drop via ApplyFeedback — counting it as a witness
 // would lift confidence for negative evidence. FR9's
 // "verdict-independent" spans gate verdicts (a MERGE tombstone must
-// not drop a witness), never attest polarity.
+// not drop a witness), never attest polarity. Self-confirms are
+// discounted in the fold (DiscountSelf — recorded, never scoring).
 func (e *Emitter) replayConfidence(rec rpc.Record) (float64, error) {
 	provs := []rpc.Provenance{rec.Provenance}
 	var evs []rpc.FeedbackEvent
@@ -330,5 +335,5 @@ func (e *Emitter) replayConfidence(rec rpc.Record) (float64, error) {
 	for i := 1; i < len(clusters); i++ {
 		witnesses = append(witnesses, rec.BaseConfidence)
 	}
-	return processing.Score(rec.BaseConfidence, witnesses, evs), nil
+	return processing.Score(rec.BaseConfidence, witnesses, processing.DiscountSelf(rec.Provenance, evs)), nil
 }

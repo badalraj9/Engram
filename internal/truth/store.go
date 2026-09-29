@@ -33,6 +33,10 @@ type Store struct {
 	mu    sync.Mutex
 	next  uint64
 	idmap map[string]uint64
+	// fbIdx is the P6 feedback-by-ID secondary (derived, rebuildable —
+	// see feedback_idx.go). Never logged; rebuilt at boot, extended on
+	// every AppendFeedback, rebuilt on truncate.
+	fbIdx map[string][]rpc.FeedbackEvent
 	// truncated/truncatedAt record a corrupt tail found at open.
 	// Scan still reports it loudly; TruncateFrom cleans it.
 	truncated   bool
@@ -47,7 +51,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("truth: open: %w", err)
 	}
-	s := &Store{db: db, idmap: make(map[string]uint64)}
+	s := &Store{db: db, idmap: make(map[string]uint64), fbIdx: make(map[string][]rpc.FeedbackEvent)}
 	if err := s.initSchema(); err != nil {
 		db.Close()
 		return nil, err
@@ -174,7 +178,8 @@ func (s *Store) recover() error {
 	}); err != nil {
 		return err
 	}
-	// F scan: decodability check only.
+	// F scan: decodability check + feedback-by-ID secondary build
+	// (P6 — derived, seq-ordered, same pass that checks integrity).
 	if err := s.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.Prefix = []byte{prefixFeedback}
@@ -188,11 +193,13 @@ func (s *Store) recover() error {
 				continue
 			}
 			if err := item.Value(func(val []byte) error {
-				if _, err := decodeFeedback(val); err != nil {
+				ev, err := decodeFeedback(val)
+				if err != nil {
 					note(seq, false)
 					return nil
 				}
 				note(seq, true)
+				s.fbIdx[ev.RecordID] = append(s.fbIdx[ev.RecordID], ev)
 				return nil
 			}); err != nil {
 				return err
@@ -541,7 +548,9 @@ func (s *Store) getAt(seq uint64) (rpc.Record, error) {
 }
 
 // AppendFeedback implements TruthStore: confidence/strength events only,
-// never content. No gate, no secondaries — replayed lazily at read.
+// never content. No gate, no S/O secondaries — the feedback-by-ID
+// secondary (fbIdx, P6) extends here under the same single-writer mu,
+// so serving and rebuild agree without a per-recall log scan.
 func (s *Store) AppendFeedback(ev rpc.FeedbackEvent) error {
 	if err := ev.Validate(); err != nil {
 		return err
@@ -557,6 +566,7 @@ func (s *Store) AppendFeedback(ev rpc.FeedbackEvent) error {
 	}); err != nil {
 		return fmt.Errorf("truth: feedback: %w", err)
 	}
+	s.fbIdx[ev.RecordID] = append(s.fbIdx[ev.RecordID], ev)
 	s.next++
 	return nil
 }
@@ -742,6 +752,9 @@ func (s *Store) truncateFrom(seq uint64) (uint64, error) {
 	s.next = seq
 	s.idmap = make(map[string]uint64)
 	if err := s.rebuildIDMap(); err != nil {
+		return 0, err
+	}
+	if err := s.rebuildFeedbackIdx(); err != nil {
 		return 0, err
 	}
 	return uint64(len(doomed)), nil
