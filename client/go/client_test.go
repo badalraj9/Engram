@@ -46,7 +46,9 @@ func openClient(t *testing.T) *Client {
 func testInput(sub, pred, obj, src, ses string) rpc.InputRecord {
 	return rpc.InputRecord{
 		Subject: sub, Predicate: pred, Object: obj,
-		ValidTime:  rpc.Interval{From: 1, To: 2},
+		// Always-true window (DESIGN §1 VALID-NOW open end): recalls
+		// run against wall-now, so toy-domain windows filter out.
+		ValidTime:  rpc.Interval{From: 0, To: 1 << 62},
 		Provenance: rpc.Provenance{Source: src, Session: ses},
 		ACL:        rpc.ACLUser, BaseConfidence: 0.5,
 	}

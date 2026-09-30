@@ -39,7 +39,7 @@ func benchSetup(b *testing.B, n int) (*truth.Store, *index.Index) {
 			Subject:        sub,
 			Predicate:      "pred",
 			Object:         fmt.Sprintf("obj-%d", i),
-			ValidTime:      rpc.Interval{From: 1, To: 2},
+			ValidTime:      rpc.Interval{From: 0, To: 1 << 62},
 			Provenance:     rpc.Provenance{Source: "s", Session: "s1"},
 			ACL:            rpc.ACLUser,
 			BaseConfidence: 0.5,
@@ -118,7 +118,7 @@ func BenchmarkEmit_Throughput(b *testing.B) {
 		_, err := e.Emit(rpc.InputRecord{
 			Subject:   fmt.Sprintf("bench-%d", i),
 			Predicate: "pred", Object: "o",
-			ValidTime:  rpc.Interval{From: 1, To: 2},
+			ValidTime:  rpc.Interval{From: 0, To: 1 << 62},
 			Provenance: rpc.Provenance{Source: "s", Session: "s1"},
 			ACL:        rpc.ACLUser, BaseConfidence: 0.5, Payload: map[string]string{}})
 		if err != nil {

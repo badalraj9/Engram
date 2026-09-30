@@ -16,6 +16,8 @@
 package daemon
 
 import (
+	"time"
+
 	"engram/internal/config"
 	"engram/internal/index"
 	"engram/internal/intake"
@@ -98,6 +100,10 @@ func (d *Daemon) ports() rpc.Ports {
 				Subject: spec.Subject, Caller: spec.Caller, Budget: spec.Budget,
 				Threshold: spec.Threshold, Beta: spec.Beta,
 				TrustLow: spec.TrustLow, TrustUser: spec.TrustUser, TrustSys: spec.TrustSys,
+				// VALID-NOW (DESIGN §1): the daemon stamps valid-now
+				// at recall execution — unix-nanos, explicit
+				// parameter, no wire field, no hidden clock (FR10).
+				Now: time.Now().UnixNano(),
 			})
 			if err != nil {
 				return nil, false, err

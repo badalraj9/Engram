@@ -4,8 +4,8 @@
 // emit/recall/correct/attest/resolve/as_of. consolidate is deliberately
 // absent (plan: the tick stays with CLI/client — the agent must not
 // schedule maintenance, FR10). as_of carries the documented v1
-// narrowing (daemon serves low history) in its description, not in
-// fine print elsewhere.
+// narrowing (low-tier history only; caller tier not on the wire) in
+// its description, not in fine print elsewhere.
 //
 // Error split (spec §error-handling): JSON-shape problems and unknown
 // tools are PROTOCOL errors (-32602); every core failure (validation,
@@ -112,7 +112,7 @@ func toolTable() []toolDef {
 		},
 		{
 			name:        "as_of",
-			description: "Bi-temporal history for terms at time t (terms[0]=subject, terms[1]=predicate; v1 serves public low history).",
+			description: "Bi-temporal history for terms at time t (terms[0]=subject, terms[1]=predicate). as_of reads low-tier history only (v1); caller tier is not conveyed on the wire.",
 			schema: schema(map[string]any{
 				"terms": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 				"t":     numProp("unix-nanos on the axis"),

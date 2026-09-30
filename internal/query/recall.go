@@ -22,7 +22,10 @@ import (
 // Spec is the recall query. Weights and thresholds are injected
 // (config-owned, TECH §2.10) — this package holds no tuned numbers.
 // Budget caps the returned set post-threshold (top-k); Threshold is
-// FR16's calibrated value (P5 refreshes it, P4 applies it).
+// FR16's calibrated value (P5 refreshes it, P4 applies it). Now is
+// valid-now in unix-nanoseconds, stamped by the daemon at recall
+// execution (DESIGN §1 VALID-NOW) — carried as an explicit parameter
+// so tests inject it deterministically; there is no wire field for it.
 type Spec struct {
 	Subject   string
 	Predicate string
@@ -34,6 +37,7 @@ type Spec struct {
 	TrustLow  float64
 	TrustUser float64
 	TrustSys  float64
+	Now       int64
 }
 
 // Validate rejects unusable specs fail-closed: unknown callers see
@@ -50,6 +54,9 @@ func (s Spec) Validate() error {
 	}
 	if s.Threshold < 0 {
 		return rpc.E(rpc.CodeInvalidRecord, "recall threshold must be >= 0")
+	}
+	if s.Now < 0 {
+		return rpc.E(rpc.CodeInvalidRecord, "recall now must be >= 0")
 	}
 	return nil
 }
@@ -76,7 +83,9 @@ type Result struct {
 // (DESIGN §2: three readers). Feedback replays per record from the
 // P6 feedback-by-ID secondary (FR17, O(candidates) — never a
 // per-recall log scan): strengths feed R_m, attest verdicts feed
-// confidence.
+// confidence. Guarantee (DESIGN §1 VALID-NOW): every returned record
+// has status in {ACTIVE, BOTH}, is not staged, and satisfies
+// valid_from <= now < valid_to.
 func Recall(idx *index.Index, store *truth.Store, spec Spec) (Result, error) {
 	if err := spec.Validate(); err != nil {
 		return Result{}, err
@@ -101,6 +110,18 @@ func Recall(idx *index.Index, store *truth.Store, spec Spec) (Result, error) {
 			continue
 		}
 		if !visibleTo(fresh, spec.Caller) {
+			continue
+		}
+		// VALID-NOW (DESIGN §1): a future-dated event is not
+		// currently-true — SCHEDULED records are hiding, not gone
+		// (visible via as_of); expired and not-yet-true windows fall
+		// out by the [t-, t+) boundary. Deliberately here, not in
+		// IsLiveCandidate: the gate matcher shares that helper and
+		// gate semantics for SCHEDULED are unratified.
+		if fresh.Status == rpc.StatusScheduled {
+			continue
+		}
+		if fresh.ValidTime.From > spec.Now || spec.Now >= fresh.ValidTime.To {
 			continue
 		}
 		hits := hitCount(idx, spec, fresh.ID)

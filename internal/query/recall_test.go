@@ -22,8 +22,12 @@ func qsetup(t *testing.T) (*intake.Emitter, *truth.Store, *index.Index) {
 }
 
 func qin(sub, pred, obj, src, ses string, acl rpc.AclTier) rpc.InputRecord {
+	// Always-true window (DESIGN §1 VALID-NOW open end): ordinary
+	// fixtures never exercise the validity filter — validity tests
+	// pass explicit windows + explicit now instead. qspec leaves Now
+	// at 0, which the always-true window contains.
 	return rpc.InputRecord{Subject: sub, Predicate: pred, Object: obj,
-		ValidTime:  rpc.Interval{From: 1, To: 10},
+		ValidTime:  rpc.Interval{From: 0, To: 1 << 62},
 		Provenance: rpc.Provenance{Source: src, Session: ses},
 		ACL:        rpc.ACLUser, BaseConfidence: 0.5, Payload: map[string]string{}}
 }
@@ -140,9 +144,15 @@ func TestRecall_DedupBudget(t *testing.T) {
 	if _, err := e.Emit(qin("pump", "runs", "yes", "s", "s1", rpc.ACLUser)); err != nil {
 		t.Fatalf("emit1: %v", err)
 	}
-	// Disjoint valid-time second version: legitimately coexists.
-	v2 := qin("pump", "runs", "no", "s", "s2", rpc.ACLUser)
-	v2.ValidTime = rpc.Interval{From: 20, To: 30}
+	// Second live version about the same subject via a disjoint key
+	// (predicate "runs dry" ≠ "runs" → no gate interaction, both
+	// INSERT): both legitimately coexist and both carry the query
+	// tokens, so per-subject dedup collapses them.
+	// (Pre-filter this was a disjoint-time pair; under VALID-NOW two
+	// disjoint windows can never both contain now, so coexistence-at-
+	// recall is pinned by disjoint keys and time-relativity by
+	// TestRecall_DisjointTime.)
+	v2 := qin("pump", "runs dry", "no", "s", "s2", rpc.ACLUser)
 	if _, err := e.Emit(v2); err != nil {
 		t.Fatalf("emit2: %v", err)
 	}

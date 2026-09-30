@@ -42,9 +42,12 @@ func openHarness(t *testing.T) *harness {
 }
 
 func emitIn(sub, pred, obj, src, ses string, acl engrampb.AclTier) *engrampb.EmitRequest {
+	// Always-true window (DESIGN §1 VALID-NOW open end): the daemon
+	// stamps wall-now at recall, so toy-domain windows would filter
+	// out — validity is query's tested property, not the wire's.
 	return &engrampb.EmitRequest{Record: &engrampb.InputRecord{
 		Subject: sub, Predicate: pred, Object: obj,
-		ValidFrom: 1, ValidTo: 2, Source: src, Session: ses,
+		ValidFrom: 0, ValidTo: 1 << 62, Source: src, Session: ses,
 		Acl: acl, BaseConfidence: 0.5,
 	}}
 }
@@ -68,7 +71,7 @@ func TestDaemon_SevenOps(t *testing.T) {
 	cr, err := h.c.Correct(h.ctx, &engrampb.CorrectRequest{
 		Hint: "pump runs yes",
 		Correction: &engrampb.InputRecord{Subject: "pump", Predicate: "runs", Object: "no",
-			ValidFrom: 1, ValidTo: 2, Source: "s", Session: "s3", Acl: engrampb.AclTier_USER, BaseConfidence: 0.5},
+			ValidFrom: 0, ValidTo: 1 << 62, Source: "s", Session: "s3", Acl: engrampb.AclTier_USER, BaseConfidence: 0.5},
 	})
 	if err != nil || cr.GetId() == "" {
 		t.Fatalf("correct: %+v err=%v", cr, err)
