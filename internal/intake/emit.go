@@ -190,6 +190,20 @@ func (e *Emitter) liveCandidates(in rpc.InputRecord) ([]rpc.Record, error) {
 // INSERT→Append, UPDATE/MERGE→Supersede, RESTRENGTHEN→AppendFeedback,
 // STAGED→StageAppend, SKIP→nothing, tier-blocked Both→Append +
 // Restatus×2. Returns the committed IDs for index application.
+// maybeSchedule labels a newly committed version SCHEDULED when its
+// valid-time starts in the future (DESIGN §1 VALID-NOW, P1 Phase B):
+// a future-dated event is hiding, not gone. Append-only preserved —
+// Restatus closes + appends, returning the new version (new id) for
+// index application. STAGED versions skip this (quarantine already
+// hides them); BOTH-flagged versions skip it (conflict visibility
+// wins — a future-dated conflict must still surface for resolve).
+func (e *Emitter) maybeSchedule(rec rpc.Record) (rpc.Record, error) {
+	if rec.ValidTime.From <= time.Now().UnixNano() {
+		return rec, nil
+	}
+	return e.store.Restatus(rec.ID, rpc.StatusScheduled)
+}
+
 func (e *Emitter) execute(in rpc.InputRecord, out processing.Outcome) (EmitResult, error) {
 	tick, err := e.store.TailOffset()
 	if err != nil {
@@ -222,6 +236,9 @@ func (e *Emitter) execute(in rpc.InputRecord, out processing.Outcome) (EmitResul
 		if err != nil {
 			return EmitResult{}, err
 		}
+		if rec, err = e.maybeSchedule(rec); err != nil {
+			return EmitResult{}, err
+		}
 		e.index.Retire(out.TargetID)
 		if err := e.promoteCorroborated(in); err != nil {
 			return EmitResult{}, err
@@ -230,6 +247,9 @@ func (e *Emitter) execute(in rpc.InputRecord, out processing.Outcome) (EmitResul
 	case rpc.VerdictUpdate:
 		rec, err := e.store.Supersede(out.TargetID, in)
 		if err != nil {
+			return EmitResult{}, err
+		}
+		if rec, err = e.maybeSchedule(rec); err != nil {
 			return EmitResult{}, err
 		}
 		e.index.Retire(out.TargetID)
@@ -241,6 +261,11 @@ func (e *Emitter) execute(in rpc.InputRecord, out processing.Outcome) (EmitResul
 		rec, err := e.store.Append(in)
 		if err != nil {
 			return EmitResult{}, err
+		}
+		if out.Status != rpc.StatusBoth {
+			if rec, err = e.maybeSchedule(rec); err != nil {
+				return EmitResult{}, err
+			}
 		}
 		res := EmitResult{Verdict: rpc.VerdictInsert, ID: rec.ID, TargetID: out.TargetID}
 		if out.Status != rpc.StatusBoth {

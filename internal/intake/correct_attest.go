@@ -165,7 +165,13 @@ func (e *Emitter) correctInsert(correction rpc.InputRecord) (rpc.Record, rpc.Ver
 }
 
 // correctAck syncs, indexes, and returns the committed revision.
+// Future-dated corrections schedule (P1 Phase B) before the sync —
+// the covering sync must include the Restatus, never just the Append.
 func (e *Emitter) correctAck(rec rpc.Record, v rpc.Verdict) (rpc.Record, rpc.Verdict, error) {
+	var err error
+	if rec, err = e.maybeSchedule(rec); err != nil {
+		return rpc.Record{}, "", err
+	}
 	if err := e.store.Sync(); err != nil {
 		return rpc.Record{}, "", err
 	}
