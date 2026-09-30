@@ -350,7 +350,14 @@ func (e *Emitter) promoteCorroborated(in rpc.InputRecord) error {
 		if err := e.store.Promote(id); err != nil {
 			return err
 		}
-		e.index.Add(rec, nil)
+		// N2: same scheduling rule as the attest-promotion leg —
+		// corroboration promotes into visibility, and visibility
+		// carries the window's label.
+		sched, err := e.maybeSchedule(rec)
+		if err != nil {
+			return err
+		}
+		e.index.Add(sched, nil)
 	}
 	return nil
 }

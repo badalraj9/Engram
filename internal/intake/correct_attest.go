@@ -293,11 +293,18 @@ func (e *Emitter) Attest(id string, confirm bool, source, session string) (float
 			if err := e.store.Promote(id); err != nil {
 				return 0, false, err
 			}
+			// N2: promotion enters active visibility — a future window
+			// must label SCHEDULED here, not lag until some later
+			// UPDATE. Pre-Sync ordering holds (Sync below covers it).
+			sched, err := e.maybeSchedule(rec)
+			if err != nil {
+				return 0, false, err
+			}
 			set, err := e.store.ListStaged()
 			if err != nil {
 				return 0, false, err
 			}
-			e.index.Add(rec, set)
+			e.index.Add(sched, set)
 			promoted = true
 		}
 	}

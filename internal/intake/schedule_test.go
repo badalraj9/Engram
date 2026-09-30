@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"engram/internal/rpc"
+	"engram/internal/truth"
 )
 
 func futureFrom() int64 { return time.Now().UnixNano() + 3600e9 }
@@ -78,5 +79,93 @@ func TestCorrect_FutureScheduled(t *testing.T) {
 	}
 	if rec.Status != rpc.StatusScheduled {
 		t.Fatalf("future-dated correction must be SCHEDULED, got %v", rec.Status)
+	}
+}
+
+// scheduledWith scans for SCHEDULED versions under one key — the
+// promotion tests assert labeling by status, not by id (scheduling
+// mints a new version id by construction).
+func scheduledWith(t *testing.T, s *truth.Store, sub, pred string) []rpc.Record {
+	t.Helper()
+	var out []rpc.Record
+	err := s.Scan(0, func(ev truth.Event) error {
+		if ev.Kind != truth.EventRecord {
+			return nil
+		}
+		r := ev.Record
+		if r.Subject == sub && r.Predicate == pred && r.Status == rpc.StatusScheduled {
+			fresh, err := s.Get(r.ID)
+			if err != nil {
+				return nil
+			}
+			if fresh.Status == rpc.StatusScheduled {
+				out = append(out, fresh)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	return out
+}
+
+// TestAttest_PromoteFutureScheduled pins N2 on the attest leg (the
+// probe's repro): STAGED future → independent confirm → promoted AND
+// SCHEDULED. The label must not lag until a later UPDATE.
+func TestAttest_PromoteFutureScheduled(t *testing.T) {
+	e, s, _ := newEmitter(t, 100)
+	in := ein("omen", "says", "rain", "low-x", "s9", rpc.ACLLow)
+	in.ValidTime = rpc.Interval{From: futureFrom(), To: futureFrom() + 3600e9}
+	st, err := e.Emit(in)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if st.Verdict != rpc.VerdictStaged {
+		t.Fatalf("low must STAGE, got %+v", st)
+	}
+	if _, promoted, err := e.Attest(st.ID, true, "s", "s2"); err != nil || !promoted {
+		t.Fatalf("independent confirm must promote: promoted=%v err=%v", promoted, err)
+	}
+	old, err := s.Get(st.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if old.Status != rpc.StatusTombstoned {
+		t.Fatalf("scheduling must close the promoted version, got %v", old.Status)
+	}
+	got := scheduledWith(t, s, "omen", "says")
+	if len(got) != 1 || got[0].Object != "rain" {
+		t.Fatalf("exactly one SCHEDULED successor expected, got %+v", got)
+	}
+}
+
+// TestEmit_PromoteFutureScheduled pins N2 on the corroborated leg:
+// a staged future version promoted by independent corroboration
+// schedules — same helper, same rule.
+func TestEmit_PromoteFutureScheduled(t *testing.T) {
+	e, s, _ := newEmitter(t, 100)
+	in := ein("rumor", "says", "x", "low-x", "s9", rpc.ACLLow)
+	in.ValidTime = rpc.Interval{From: futureFrom(), To: futureFrom() + 3600e9}
+	if _, err := e.Emit(in); err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	corro := ein("rumor", "says", "x", "s", "s2", rpc.ACLUser)
+	// Past window (ein default): the corroborator itself stays ACTIVE,
+	// so the scan below isolates the promoted successor — exactly one
+	// SCHEDULED row.
+	res, err := e.Emit(corro)
+	if err != nil {
+		t.Fatalf("corroborate: %v", err)
+	}
+	if res.Verdict != rpc.VerdictInsert {
+		t.Fatalf("staged-invisible gate must INSERT, got %+v", res)
+	}
+	if staged, err := s.ListStaged(); err != nil || len(staged) != 0 {
+		t.Fatalf("promotion must peel the marker, got %+v err=%v", staged, err)
+	}
+	got := scheduledWith(t, s, "rumor", "says")
+	if len(got) != 1 || got[0].Object != "x" {
+		t.Fatalf("exactly one SCHEDULED successor expected, got %+v", got)
 	}
 }
