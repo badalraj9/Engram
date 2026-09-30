@@ -27,17 +27,31 @@ import (
 // live derived record depends on. Returns victim IDs (committed via
 // Restatus, unretired from the index — the caller retires + Syncs).
 // Deterministic: victims sort by ID.
+//
+// Raw mechanism, not tick policy: horizon disabled (0) — the FR11
+// fence tests pin economics here, while the tick passes RetireHorizon
+// and the Calibrated gate (P2 E2). Callers wanting the contract read
+// Consolidate, not this function.
 func Prune(store *truth.Store, idx *index.Index, evict float64) ([]string, error) {
 	tail, err := store.TailOffset()
 	if err != nil {
 		return nil, err
 	}
-	return pruneAt(store, idx, evict, int64(tail))
+	return pruneAt(store, idx, evict, int64(tail), 0)
 }
 
+// RetireHorizon is the E2 recency guard (v1-fixed provisional, commit
+// sequence steps): a version touched — written or feedback-verdict —
+// within the horizon survives regardless of birth. Forgetting must
+// mean disuse, never age. Same fitting path as the trio (dogfood →
+// M-gates/FR16 → config).
+const RetireHorizon int64 = 100000
+
 // pruneAt runs the pass against a frozen now (see calibrateAt: the
-// tick threads one clock through the whole pass).
-func pruneAt(store *truth.Store, idx *index.Index, evict float64, now int64) ([]string, error) {
+// tick threads one clock through the whole pass). horizon <= 0
+// disables the recency guard (raw economics for the fence tests);
+// the tick passes RetireHorizon.
+func pruneAt(store *truth.Store, idx *index.Index, evict float64, now, horizon int64) ([]string, error) {
 	live := liveIndex(store, idx)
 	reachable, err := reachableFrom(store, live)
 	if err != nil {
@@ -57,12 +71,29 @@ func pruneAt(store *truth.Store, idx *index.Index, evict float64, now int64) ([]
 		if baselineValue(r, now) >= evict {
 			continue
 		}
+		if horizon > 0 && now-lastTouch(store, r) <= horizon {
+			continue
+		}
 		if _, err := store.Restatus(r.ID, rpc.StatusTombstoned); err != nil {
 			return victims, err
 		}
 		victims = append(victims, r.ID)
 	}
 	return victims, nil
+}
+
+// lastTouch returns the newest commit-sequence step at which the
+// version saw activity: its birth or its latest feedback verdict.
+// Attest/correct ticks ride the same commit sequence as writes — one
+// clock, so recency needs no second source.
+func lastTouch(store *truth.Store, r rpc.Record) int64 {
+	touch := r.Txn.From
+	for _, ev := range store.FeedbackFor(r.ID) {
+		if ev.Tick > touch {
+			touch = ev.Tick
+		}
+	}
+	return touch
 }
 
 // liveIndex resolves the serving index to store-authoritative latest

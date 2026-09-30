@@ -11,11 +11,17 @@ import (
 )
 
 func minput(sub, pred, obj, src, ses string, acl rpc.AclTier) rpc.InputRecord {
+	// Always-true window (DESIGN §1 VALID-NOW open end): the tick
+	// stamps wall-now, so toy-domain windows would expire under test.
 	return rpc.InputRecord{Subject: sub, Predicate: pred, Object: obj,
-		ValidTime:  rpc.Interval{From: 1, To: 2},
+		ValidTime:  rpc.Interval{From: 0, To: 1 << 62},
 		Provenance: rpc.Provenance{Source: src, Session: ses},
 		ACL:        acl, BaseConfidence: 0.5, Payload: map[string]string{}}
 }
+
+// tickWall is the fixed wall-clock the tick tests stamp (deterministic
+// — validity fixtures place explicit windows around it or beside it).
+const tickWall = 1700000000000000000
 
 func mopen(t *testing.T) (*intake.Emitter, *truth.Store, *index.Index) {
 	t.Helper()
@@ -38,17 +44,17 @@ func TestTick_MonotonicNoMutation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r1, err := Consolidate(s, idx, 0)
+	r1, err := Consolidate(s, idx, 0, tickWall)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r1.Consolidated != 1 {
 		t.Fatalf("want 1 summary, got %+v", r1)
 	}
-	if _, err := Consolidate(s, idx, 0); err == nil {
+	if _, err := Consolidate(s, idx, 0, tickWall); err == nil {
 		t.Fatal("re-running tick 0 must fail")
 	}
-	r2, err := Consolidate(s, idx, 1)
+	r2, err := Consolidate(s, idx, 1, tickWall)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +83,7 @@ func TestSweep_FlagsOverlap(t *testing.T) {
 	staged, _ := s.ListStaged()
 	idx.Add(a, staged)
 	idx.Add(b, staged)
-	res, err := Consolidate(s, idx, 0)
+	res, err := Consolidate(s, idx, 0, tickWall)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +115,7 @@ func TestPrune_Invariant(t *testing.T) {
 	if _, err := e.Emit(minput("lone", "p", "o", "s", "other", rpc.ACLUser)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Consolidate(s, idx, 0); err != nil {
+	if _, err := Consolidate(s, idx, 0, tickWall); err != nil {
 		t.Fatal(err)
 	}
 	victims, err := Prune(s, idx, 999)
@@ -198,7 +204,7 @@ func TestConsolidate_RejectPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	res, err := Consolidate(s, idx, 0)
+	res, err := Consolidate(s, idx, 0, tickWall)
 	if err != nil {
 		t.Fatal(err)
 	}

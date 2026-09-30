@@ -58,6 +58,11 @@ type Thresholds struct {
 	Abstain float64 // recall floor, FR6 score scale, >= 0
 	Accept  float64 // consolidation ceiling, distortion [0,1]
 	Evict   float64 // pruning floor, FR6 score scale, >= 0
+	// Calibrated reports whether the corpus cleared MinCalSamples.
+	// P2 E2 reads this, never the values: sub-sample corpora retire
+	// nothing (conservative by construction — dogfood retires nothing
+	// until it has thirty witnesses). Internal only, never wired.
+	Calibrated bool
 }
 
 // Defaults returns the empty-store thresholds.
@@ -121,9 +126,10 @@ func calibrateAt(store *truth.Store, now int64) (Thresholds, error) {
 	}
 	sort.Float64s(values)
 	return Thresholds{
-		Abstain: quant(values, 0.25),
-		Accept:  DefaultAccept,
-		Evict:   quant(values, 0.10),
+		Abstain:    quant(values, 0.25),
+		Accept:     DefaultAccept,
+		Evict:      quant(values, 0.10),
+		Calibrated: true,
 	}, nil
 }
 

@@ -1,11 +1,13 @@
-// Tool table: the six MCP tools over client/go (Q1).
+// Tool table: the seven MCP tools over client/go (Q1 six plus the
+// P2 operator tick).
 //
 // remember/recall/correct/attest/resolve/as_of map onto
-// emit/recall/correct/attest/resolve/as_of. consolidate is deliberately
-// absent (plan: the tick stays with CLI/client — the agent must not
-// schedule maintenance, FR10). as_of carries the documented v1
-// narrowing (low-tier history only; caller tier not on the wire) in
-// its description, not in fine print elsewhere.
+// emit/recall/correct/attest/resolve/as_of. consolidate is the
+// operator maintenance trigger (host-invoked cadence — the daemon
+// still never schedules itself, FR10; the description names the
+// invoker so routine agents don't adopt it). as_of carries the
+// documented v1 narrowing (low-tier history only; caller tier not on
+// the wire) in its description, not in fine print elsewhere.
 //
 // Error split (spec §error-handling): JSON-shape problems and unknown
 // tools are PROTOCOL errors (-32602); every core failure (validation,
@@ -47,7 +49,7 @@ type toolDef struct {
 	run         func(ctx context.Context, c *goClient.Client, args map[string]any) (string, error)
 }
 
-// toolTable is the full six-tool surface (list order is wire order).
+// toolTable is the full seven-tool surface (list order is wire order).
 func toolTable() []toolDef {
 	recordProps := func() map[string]any {
 		return map[string]any{
@@ -119,6 +121,14 @@ func toolTable() []toolDef {
 				"axis":  strProp("valid|transaction"),
 			}, "terms", "t", "axis"),
 			run: runAsOf,
+		},
+		{
+			name:        "consolidate",
+			description: "Operator maintenance tick at N (host-triggered cadence, FR10 — not for routine agent use): runs sweep→calibrate→consolidate→expire→prune; prints counts. Invoker: the host operator or probe harness.",
+			schema: schema(map[string]any{
+				"tick": numProp("monotonic tick number (must exceed last accepted tick)"),
+			}, "tick"),
+			run: runConsolidate,
 		},
 	}
 }
@@ -378,4 +388,19 @@ func runAsOf(_ context.Context, c *goClient.Client, args map[string]any) (string
 		fmt.Fprintf(&b, "- %s | %s | %s [id=%s status=%s]\n", r.Subject, r.Predicate, r.Object, r.ID, r.Status)
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+func runConsolidate(_ context.Context, c *goClient.Client, args map[string]any) (string, error) {
+	v, ok := args["tick"].(float64)
+	if !ok {
+		return "", fmt.Errorf("argument \"tick\" must be a number")
+	}
+	if v < 0 || v != float64(int64(v)) {
+		return "", fmt.Errorf("argument \"tick\" must be a non-negative integer")
+	}
+	cons, pruned, err := c.Consolidate(context.Background(), int64(v))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("tick=%d consolidated=%d pruned=%d", int64(v), cons, pruned), nil
 }

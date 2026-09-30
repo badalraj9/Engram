@@ -16,6 +16,7 @@
 package daemon
 
 import (
+	"log"
 	"time"
 
 	"engram/internal/config"
@@ -117,10 +118,17 @@ func (d *Daemon) ports() rpc.Ports {
 			return query.AsOf(d.store, subject, predicate, t, axis, rpc.ACLLow)
 		},
 		Consolidate: func(tick int64) (int, int, float64, float64, error) {
-			res, err := maintenance.Consolidate(d.store, d.idx, tick)
+			// Two clocks per contract (DESIGN §6): wall-now for
+			// validity, stamped here where the authority lives.
+			res, err := maintenance.Consolidate(d.store, d.idx, tick, time.Now().UnixNano())
 			if err != nil {
 				return 0, 0, 0, 0, err
 			}
+			// Per-cause split (P2 contract): the wire carries the
+			// lumped total; the split surfaces here until Q4 widens
+			// the wire. Visible without reading code.
+			log.Printf("engram: tick=%d consolidated=%d expired=%d retired=%d",
+				tick, res.Consolidated, res.Expired, res.Retired)
 			return res.Consolidated, res.Pruned, res.Thresholds.Abstain, res.Thresholds.Evict, nil
 		},
 		Rebuild: func() error { return d.rebuild() },

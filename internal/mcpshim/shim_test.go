@@ -99,7 +99,7 @@ func itoa(n int) string {
 
 // TestShim_Handshake pins the lifecycle vector: initialize answers the
 // version + tools capability, the initialized notification draws no
-// reply, tools/list names the six tools.
+// reply, tools/list names the seven tools.
 func TestShim_Handshake(t *testing.T) {
 	r := openRig(t)
 	frames := r.call(t,
@@ -119,10 +119,10 @@ func TestShim_Handshake(t *testing.T) {
 	}
 	res2, _ := frames[1]["result"].(map[string]any)
 	tools, _ := res2["tools"].([]any)
-	if len(tools) != 6 {
-		t.Fatalf("want 6 tools, got %d", len(tools))
+	if len(tools) != 7 {
+		t.Fatalf("want 7 tools, got %d", len(tools))
 	}
-	want := map[string]bool{"remember": true, "recall": true, "correct": true, "attest": true, "resolve": true, "as_of": true}
+	want := map[string]bool{"remember": true, "recall": true, "correct": true, "attest": true, "resolve": true, "as_of": true, "consolidate": true}
 	for _, tl := range tools {
 		m, _ := tl.(map[string]any)
 		delete(want, m["name"].(string))
@@ -185,6 +185,27 @@ func TestShim_Walk(t *testing.T) {
 	frames = r.call(t, miss)
 	if text := resultText(t, frames[0]); !strings.Contains(text, "ABSTAIN") {
 		t.Fatalf("miss must ABSTAIN, got %q", text)
+	}
+}
+
+// TestShim_Consolidate pins the 7th verb (P2 operator trigger): a
+// tick round-trips over raw lines and prints counts — stale ticks
+// fail as isError tool results, never protocol errors.
+func TestShim_Consolidate(t *testing.T) {
+	r := openRig(t)
+	frames := r.call(t,
+		frame(1, "tools/call", `{"name":"consolidate","arguments":{"tick":0}}`),
+	)
+	text := resultText(t, frames[0])
+	if !strings.Contains(text, "tick=0") || !strings.Contains(text, "consolidated=") {
+		t.Fatalf("consolidate: %q", text)
+	}
+	frames = r.call(t,
+		frame(2, "tools/call", `{"name":"consolidate","arguments":{"tick":0}}`),
+	)
+	res, _ := frames[0]["result"].(map[string]any)
+	if res["isError"] != true {
+		t.Fatalf("re-tick must fail closed, got %v", frames[0])
 	}
 }
 

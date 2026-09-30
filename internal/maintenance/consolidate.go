@@ -1,10 +1,12 @@
 // Serialized tick (P5 — FR10, DESIGN §6, BUILD-PLAN P5 exit).
 //
 // One maintenance pass performs, IN THIS ORDER, serialized within a
-// single host-supplied tick: sweep (invariant-audit) → consolidate →
-// prune → calibrate. No timer, no time.Ticker, no background goroutine
-// (frozen FR10) — the host owns the clock; this package owns the
-// ordering. The file imports no time package by construction.
+// single host-supplied tick: sweep (invariant-audit) → calibrate →
+// consolidate → expire (validity sweep, P2 E1) → prune (economics,
+// P2 E2, calibrated-gated). No timer, no time.Ticker, no background
+// goroutine (frozen FR10) — the host owns the clock; this package owns
+// the ordering. The file imports no time package by construction:
+// wall-now arrives as a daemon-stamped parameter.
 //
 // Tick durability: the host counter is monotonic; Engram remembers the
 // high-water mark (M/tick, truth/tick.go) and rejects tick <= last, so
@@ -42,15 +44,28 @@ type Result struct {
 	Swept        int
 	Consolidated int
 	Pruned       int
-	Thresholds   Thresholds
+	// Expired/Retired split Pruned by cause (P2 contract): validity
+	// sweep vs economics retirement. Pruned stays the wire-compatible
+	// total; the split surfaces on holder stderr now, wire fields at
+	// Q4. Internal only.
+	Expired    int
+	Retired    int
+	Thresholds Thresholds
 }
 
-// Consolidate runs one serialized tick: sweep → consolidate → prune →
-// calibrate, then commits the tick mark and Syncs once. tick <= last
+// Consolidate runs one serialized tick: sweep → calibrate → consolidate →
+// expire → prune, then commits the tick mark and Syncs once. tick <= last
 // fails closed with no mutation. The serving index is updated inline
 // (Add new versions, Retire closed ones) — under the server's single
 // mutex, never concurrently.
-func Consolidate(store *truth.Store, idx *index.Index, tick int64) (Result, error) {
+//
+// Two clocks, one per domain (P2): the commit-sequence tail drives
+// economics (retrievability breathes in seq steps — RecencyHalfLife),
+// while wallNow drives validity (windows are world time in
+// unix-nanos — DESIGN §1). wallNow arrives as an explicit parameter,
+// daemon-stamped like recall now: maintenance stays time-free, the
+// clock lives where the authority does.
+func Consolidate(store *truth.Store, idx *index.Index, tick, wallNow int64) (Result, error) {
 	last, err := store.LastTick()
 	if err != nil {
 		return Result{}, err
@@ -81,14 +96,31 @@ func Consolidate(store *truth.Store, idx *index.Index, tick int64) (Result, erro
 		return Result{}, err
 	}
 	res.Consolidated = cons
-	victims, err := pruneAt(store, idx, th.Evict, now)
+	// P2 E1: validity sweep closes expired windows — the tick as
+	// closer, before economics runs.
+	expired, err := expireAt(store, idx, wallNow)
 	if err != nil {
 		return Result{}, err
 	}
-	for _, id := range victims {
+	for _, id := range expired {
 		idx.Retire(id)
 	}
-	res.Pruned = len(victims)
+	res.Expired = len(expired)
+	// P2 E2: economics retirement fires only on calibrated thresholds
+	// — sub-sample corpora retire nothing (conservative by
+	// construction). The horizon guard lives in pruneAt.
+	var retired []string
+	if th.Calibrated {
+		retired, err = pruneAt(store, idx, th.Evict, now, RetireHorizon)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	for _, id := range retired {
+		idx.Retire(id)
+	}
+	res.Retired = len(retired)
+	res.Pruned = len(expired) + len(retired)
 	res.Thresholds = th
 	if err := store.CommitTick(tick); err != nil {
 		return Result{}, err
