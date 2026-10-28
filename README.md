@@ -28,17 +28,27 @@ Seven operations: `emit`, `recall`, `correct`, `attest`, `resolve`,
 
 ## Status
 
-> P0–P6 built on branch `v1/p0-p5`: truth log, write gate,
+> v1 complete on branch `v1(full)`: truth log, write gate,
 > rebuildable index, read path (ranker + abstain + resolve +
 > quarantine), UDS/gRPC daemon with serialized tick, full gates
-> (M1–M5/M7/M8b), feedback lookup, `cmd/engramd` + thin client.
-> Full tree `build + vet + fmt + test` green (11/11 pkgs).
-> Next: dogfood (UC5) — the running system decides what v1.1 earns.
+> (M1–M5, M6, M7, M8a, M8b), feedback lookup, `cmd/engramd` + Go
+> client + MCP shim. Post-v1 polish landed: valid-now enforcement
+> on the read path (every recalled fact satisfies
+> `valid_from <= now < valid_to`, SCHEDULED excluded from recall),
+> tick-GC (expired-window expiry plus disuse-based retirement
+> inside the host tick), and the seventh MCP verb `consolidate`.
+> Full tree `build + vet + fmt + test` green (13 packages under
+> test; 2 transport/schema packages ship without test files).
+> Next: dogfood (UC5) — the running system decides what v1.1 earns;
+> queued candidates and their entry gates live in `docs/BUILD-PLAN.md`.
 
-Honest numbers (i5-12450H): recall 10ms at 10K facts, 111.5ms at
-100K — the per-recall log scan behind that linearity is gone (P6
-feedback secondary, O(candidates)); writes hold p99 ~1ms flat from
-1K to 1M facts. Nothing here claims scale it hasn't measured.
+Honest numbers (i5-12450H): recall 0.16ms at 1K facts, 0.43ms at
+10K, 31.6ms at 100K — the P6 feedback secondary replaced the per-
+recall log scan that made the old numbers linear (10ms and 111.5ms
+before; 3.5-23x faster, one machine, one run). 1M extrapolates to
+~0.3s and is pending its replay measurement (Q3 in the build plan).
+Writes hold p99 0.56-1.1ms flat from 1K to 1M facts, measured (M7).
+Nothing here claims scale it hasn't measured.
 
 ## Docs (read in this order)
 
@@ -61,8 +71,21 @@ go test ./...
 ```
 
 That's the whole suite — no services to start, no keys, no network.
-(`go run ./cmd/engramd` starts the daemon; `--both` adds the MCP
-stdio translator on the same process; `client/go` is the thin stub.)
+
+One binary, four modes:
+
+- `engramd` — serve the Unix-socket daemon only
+- `engramd --mcp` — stdio MCP translator dialing a live daemon
+  (tools: remember, recall, correct, attest, resolve, as_of,
+  consolidate)
+- `engramd --both` — daemon and MCP translator in one process
+- `engramd --tick N` — one-shot maintenance tick through a live
+  daemon (host-triggered cadence; the daemon never schedules itself)
+
+Store and socket live in the working directory by default
+(`./engram-data`, `./engram.sock`); pin them with `ENGRAM_DATA_DIR`
+and `ENGRAM_UDS_PATH`. `client/go` is the thin Go stub; the MCP shim
+serves any standard MCP host.
 
 ## The rules it won't break
 
@@ -81,6 +104,12 @@ and every phase's tests prove them.
 - [x] P4 read — ranker, abstention, resolve (M6)
 - [x] P5 serve — UDS/gRPC daemon, serialized tick, calibration refresh, repair op
 - [x] P6 harden — measurement gates (M1–M5/M7/M8b), feedback lookup, `cmd/` + client
+- [x] Post-v1 polish — valid-now read enforcement, SCHEDULED labeling,
+  tick-GC (expire + calibrated retirement), 7th MCP verb `consolidate`
+- [ ] v1.1 — dogfood (UC5) decides: emit curve at 1M (Q3), wire
+  widening via protoc (Q4), latency cascade (Q5), semantic lane
+  (Q7) — each has an entry gate in `docs/BUILD-PLAN.md`; nothing
+  starts until its gate opens
 
 ## License
 
