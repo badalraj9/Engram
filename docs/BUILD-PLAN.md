@@ -91,6 +91,7 @@ Each phase exits with a runnable, tested slice. No test-compat hacks — phases 
 - P3 Scores in recall text: transport drops scores/confidences today; needs the protoc session — rides Q4.
 - P4 Holder permanence: memory depends on a never-closed terminal; scheduled-task one-liner in docs, no code.
 - P5 Probe-litter aging: junk ages out via ticks by design; cadence note, not code.
+- P6 Pinned store path in exe (owner 2026-10-13, thought only): bare `engramd` must just work — no env ritual. Shape TBD (owner leaning: interactive first-run — exe asks preferences, toggleable options); proper fix in polished, not a bat workaround.
 
 ## Locked resolutions
 1. `resolve()` logic lives in `processing/resolve.go` (P4); transport only in P5.
