@@ -45,10 +45,11 @@ type Result struct {
 	Consolidated int
 	Pruned       int
 	// Expired/Retired split Pruned by cause (P2 contract): validity
-	// sweep vs economics retirement. Pruned stays the wire-compatible
-	// total; the split surfaces on holder stderr now, wire fields at
-	// Q4. Internal only.
+	// sweep vs economics retirement. Activated counts the F1
+	// SCHEDULED→ACTIVE flips in the same sweep (2026-11-13). All
+	// internal now; wire fields at Q4.
 	Expired    int
+	Activated  int
 	Retired    int
 	Thresholds Thresholds
 }
@@ -96,9 +97,10 @@ func Consolidate(store *truth.Store, idx *index.Index, tick, wallNow int64) (Res
 		return Result{}, err
 	}
 	res.Consolidated = cons
-	// P2 E1: validity sweep closes expired windows — the tick as
-	// closer, before economics runs.
-	expired, err := expireAt(store, idx, wallNow)
+	// P2 E1 (amended 2026-11-13, F1): validity sweep — expiry closes
+	// expired windows, activation wakes SCHEDULED versions whose
+	// window opened. The tick as closer, before economics runs.
+	expired, activated, err := expireAt(store, idx, wallNow)
 	if err != nil {
 		return Result{}, err
 	}
@@ -106,6 +108,15 @@ func Consolidate(store *truth.Store, idx *index.Index, tick, wallNow int64) (Res
 		idx.Retire(id)
 	}
 	res.Expired = len(expired)
+	staged, err := store.ListStaged()
+	if err != nil {
+		return Result{}, err
+	}
+	for _, a := range activated {
+		idx.Retire(a.OldID)
+		idx.Add(a.Rec, staged)
+	}
+	res.Activated = len(activated)
 	// P2 E2: economics retirement fires only on calibrated thresholds
 	// — sub-sample corpora retire nothing (conservative by
 	// construction). The horizon guard lives in pruneAt.
