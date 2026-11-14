@@ -59,8 +59,8 @@ func (c Config) Validate() error {
 	if c.WorkingCap <= 0 {
 		return errors.New("config: working_cap must be positive")
 	}
-	if c.AbstainThreshold < 0 || c.AbstainThreshold > 1 {
-		return errors.New("config: abstain_threshold must be in [0,1]")
+	if c.AbstainThreshold < 0 {
+		return errors.New("config: abstain_threshold must be >= 0 (FR6 score scale is unbounded)")
 	}
 	if c.TrustLow <= 0 || c.TrustUser <= 0 || c.TrustSystem <= 0 {
 		return errors.New("config: trust weights must be positive")

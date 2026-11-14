@@ -15,11 +15,17 @@ import (
 // enforced by Store.mu; DetectConflicts is off because serialization
 // is explicit, not optimistic. SyncWrites stays off — durability lands
 // at explicit Sync boundaries (group commit), never per-write.
+// Sizes are embedded-tuned (dogfood 2026-09-29: defaults preallocate a
+// 2GB value log + 128MB memtables for kilobytes of facts): 64MB value
+// logs, 16MB memtables — ample for a single-user memory store, and the
+// tick's value-log GC reclaims drained files.
 func OpenOptions(path string) badger.Options {
 	opts := badger.DefaultOptions(path)
 	opts.SyncWrites = false
 	opts.NumVersionsToKeep = 1
 	opts.DetectConflicts = false
+	opts.ValueLogFileSize = 64 << 20
+	opts.MemTableSize = 16 << 20
 	return opts
 }
 
@@ -36,4 +42,13 @@ func RunValueLogGC(db *badger.DB) error {
 		}
 	}
 	return nil
+}
+
+// RunValueLogGC reclaims the store's value-log space under the
+// single-writer lock. Additive tick helper — the TruthStore interface
+// is P0-closed and stays untouched.
+func (s *Store) RunValueLogGC() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return RunValueLogGC(s.db)
 }

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "engram": {
+        "type": "local",
+        "command": ["D:\\engram\\engramd.exe", "--mcp"],
+        "environment": {
+          "ENGRAM_DATA_DIR": "D:\\engram-data",
+          "ENGRAM_UDS_PATH": "D:\\engram-data\\engram.sock"
+        }
+      }
+    }
+  }
+}
