@@ -196,6 +196,18 @@ func applyMap(cfg *Config, entries map[string]string) error {
 				return fmt.Errorf("config: bad boolean for %s", raw)
 			}
 			cfg.CompactionGuard = b
+		case "panel_port":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return fmt.Errorf("config: bad integer for %s", raw)
+			}
+			cfg.PanelPort = n
+		case "panel_token":
+			s, ok := unquote(val)
+			if !ok {
+				return fmt.Errorf("config: bad string for %s", raw)
+			}
+			cfg.PanelToken = s
 		default:
 			return fmt.Errorf("config: unknown key %q", raw)
 		}
@@ -252,6 +264,8 @@ func applyEnv(cfg *Config) error {
 			cfg.CompactionGuard = b
 			return nil
 		}),
+		set("ENGRAM_PANEL_PORT", integer(&cfg.PanelPort)),
+		set("ENGRAM_PANEL_TOKEN", func(v string) error { cfg.PanelToken = v; return nil }),
 	}
 	for _, err := range checks {
 		if err != nil {

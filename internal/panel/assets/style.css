@@ -1,0 +1,35 @@
+/* Operator's bench v0: paper ground, ink text, quiet rules.
+   Full visual brief lands with the screens phase — this exists to
+   prove the armored serve path, nothing more. */
+:root {
+  --paper: #F5F4F1;
+  --ink: #191C1F;
+  --rule: #D9D8D3;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+header {
+  border-bottom: 1px solid var(--rule);
+  padding: 12px 24px;
+}
+.mark {
+  font-weight: 600;
+}
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 24px;
+}
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 8px;
+  word-break: break-word;
+}
+.quiet {
+  color: #5a5f63;
+}

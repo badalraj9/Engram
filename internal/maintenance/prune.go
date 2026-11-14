@@ -50,9 +50,30 @@ const RetireHorizon int64 = 100000
 // pruneAt runs the pass against a frozen now (see calibrateAt: the
 // tick threads one clock through the whole pass). horizon <= 0
 // disables the recency guard (raw economics for the fence tests);
-// the tick passes RetireHorizon.
+// the tick passes RetireHorizon. Classifies first (shared read-only
+// criteria with the R0 dry-run), then closes the victims.
 func pruneAt(store *truth.Store, idx *index.Index, evict float64, now, horizon int64) ([]string, error) {
 	live := liveIndex(store, idx)
+	victims, err := pruneVictims(store, live, evict, now, horizon)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range victims {
+		if _, err := store.Restatus(id, rpc.StatusTombstoned); err != nil {
+			return victims, err
+		}
+	}
+	return victims, nil
+}
+
+// pruneVictims is the E2 criteria, read-only (R0 dry-run shares it
+// with the real pass — one implementation, zero drift): given the
+// store-verified live records, it names the versions economics would
+// close — EPISODIC, ACTIVE, not reachable from a live DerivedFrom
+// chain, below the evict floor, and (horizon > 0) untouched within
+// the recency horizon. Classification never mutates; the caller owns
+// the Restatus calls.
+func pruneVictims(store *truth.Store, live []rpc.Record, evict float64, now, horizon int64) ([]string, error) {
 	reachable, err := reachableFrom(store, live)
 	if err != nil {
 		return nil, err
@@ -73,9 +94,6 @@ func pruneAt(store *truth.Store, idx *index.Index, evict float64, now, horizon i
 		}
 		if horizon > 0 && now-lastTouch(store, r) <= horizon {
 			continue
-		}
-		if _, err := store.Restatus(r.ID, rpc.StatusTombstoned); err != nil {
-			return victims, err
 		}
 		victims = append(victims, r.ID)
 	}

@@ -1,11 +1,13 @@
 // Command engramd runs the Engram memory daemon (P6 — BUILD-RANKS E;
-// Q1 adds the MCP modes).
+// Q1 adds the MCP modes; R0 adds holder takeover to --mcp).
 //
 // Three modes, one binary:
 //
 //	engramd               serve the UDS socket only (no-MCP users; stdout clean)
-//	engramd --mcp         shim only: stdio MCP translator dialing a live
-//	                      socket (opens no store — N agents share one daemon)
+//	engramd --mcp         stdio MCP translator: connects to a live holder,
+//	                      or — when none answers — becomes the holder
+//	                      (same Open→Serve path as --both; lock-gated;
+//	                      losing the store race falls back to dialing)
 //	engramd --both        co-start: one process opens the store once and
 //	                      serves socket + stdio together (one command start)
 //
@@ -21,6 +23,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +31,16 @@ import (
 	"engram/internal/config"
 	"engram/internal/daemon"
 	"engram/internal/mcpshim"
+)
+
+// dialRetryWindow bounds how long a process that LOST the store race
+// waits for the winner's socket (bug report 2026-11-14: two --mcp
+// starters racing on a fresh dir must both survive — the loser dials
+// the winner; if no holder ever serves, the loser exits non-zero
+// within ~5s instead of hanging).
+const (
+	dialRetryWindow   = 5 * time.Second
+	dialRetryInterval = 50 * time.Millisecond
 )
 
 func main() {
@@ -95,23 +108,96 @@ func runServe(configPath string) error {
 	return nil
 }
 
-// runShim dials a live socket and translates stdio MCP (Q1 --mcp mode).
-// Fail-fast when the socket file is absent (definitely dead); a
-// present-but-dead socket fails per-call as isError (fail-closed).
+// runShim — Q1 --mcp mode, R0 takeover (BUILD-PLAN R0 item 1), with
+// the boot-race rule (bug report 2026-11-14): try the socket first; a
+// live holder answers and this process stays a dialer. No live holder
+// → attempt to become the holder through the SAME daemon.Open path.
+// Losing the store race is a normal outcome, not an error: the
+// winner is mid-takeover and will serve the socket shortly, so the
+// loser falls back to the dial path with a bounded wait. Only a
+// non-lock open failure is fatal. The Badger store lock stays
+// fail-closed for writes throughout — only the process lifecycle
+// changed, never the single-writer rule. MCP-mode logging is
+// stderr-only; zero stdout bytes except JSON-RPC in every path (the
+// R0 lint test enforces).
 func runShim(configPath string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(cfg.UDSPath); err != nil {
-		return fmt.Errorf("shim: no live socket at %s: %w", cfg.UDSPath, err)
+	if holderLive(cfg.UDSPath) {
+		return dialShim(cfg)
 	}
+	// No live holder: race to become it (same path as --both).
+	d, err := daemon.Open(cfg)
+	if err == nil {
+		defer func() { _ = d.Close() }()
+		return holderServe(cfg, d)
+	}
+	if !storeLocked(err) {
+		return err // a real open failure is loud and fatal
+	}
+	// Lost the race: another starter holds the store lock and is
+	// becoming the holder. Wait, bounded, for its socket — a lock
+	// conflict is evidence of a concurrent starter, never of a broken
+	// disk. Diagnostics are stderr-only.
+	log.Printf("shim: store locked by another starter; waiting to dial %s", cfg.UDSPath)
+	if waitHolder(cfg.UDSPath, dialRetryWindow) {
+		return dialShim(cfg)
+	}
+	return fmt.Errorf("shim: no holder answered at %s within %s (a process holds the store lock but never served)",
+		cfg.UDSPath, dialRetryWindow)
+}
+
+// dialShim connects to the live holder and serves MCP over stdio.
+func dialShim(cfg config.Config) error {
 	c, err := goClient.Dial(cfg.UDSPath)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
 	return mcpshim.New(c).Serve(os.Stdin, os.Stdout)
+}
+
+// storeLocked reports whether err is the badger directory-lock
+// conflict. Matched on badger's fixed message (pinned v4.9.6,
+// dir_windows.go:85 / dir_unix.go:56); the wraps added by truth.Open
+// and daemon.Open are string-preserving, so the substring survives.
+func storeLocked(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Another process is using this Badger database")
+}
+
+// waitHolder polls until a holder answers on sock (bounded — never
+// forever, per the no-hang clause of the boot-race report).
+func waitHolder(sock string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if holderLive(sock) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(dialRetryInterval)
+	}
+}
+
+// holderLive probes the socket with one real round trip. Dialing
+// alone is not proof (Q1 finding: a present-but-dead socket dials and
+// fails per-call); a live holder ANSWERS the probe — ABSTAIN counts.
+func holderLive(sock string) bool {
+	if _, err := os.Stat(sock); err != nil {
+		return false
+	}
+	c, err := goClient.Dial(sock)
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _, err = c.Recall(ctx, []string{"engram-holder-probe"}, 1, "system")
+	return err == nil
 }
 
 // runBoth is the Q1 co-start rule: one process, one store open, socket
@@ -128,6 +214,12 @@ func runBoth(configPath string) error {
 	defer func() {
 		_ = d.Close()
 	}()
+	return holderServe(cfg, d)
+}
+
+// holderServe runs the socket+stdio loop for an already-open daemon —
+// shared verbatim by --both and the takeover winner in runShim.
+func holderServe(cfg config.Config, d *daemon.Daemon) error {
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- d.Serve(cfg.UDSPath)

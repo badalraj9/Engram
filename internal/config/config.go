@@ -23,6 +23,11 @@ type Config struct {
 	TrustSystem      float64
 	RateLimitPerSec  int
 	CompactionGuard  bool
+	// Operator surface (R0): the local panel. Port 0 = off (v1
+	// default — today's behavior unchanged); a set port REQUIRES a
+	// token (fail-closed: the panel never serves unauthenticated).
+	PanelPort  int
+	PanelToken string
 }
 
 // Default returns the v1 starting values (SRS FR6 beta ~ 0.5, d = 2048).
@@ -67,6 +72,12 @@ func (c Config) Validate() error {
 	}
 	if c.RateLimitPerSec <= 0 {
 		return errors.New("config: rate_limit_per_sec must be positive")
+	}
+	if c.PanelPort < 0 || c.PanelPort > 65535 {
+		return errors.New("config: panel_port must be 0 (off) or in [1,65535]")
+	}
+	if c.PanelPort != 0 && strings.TrimSpace(c.PanelToken) == "" {
+		return errors.New("config: panel_port set requires panel_token (the panel never serves unauthenticated)")
 	}
 	return nil
 }

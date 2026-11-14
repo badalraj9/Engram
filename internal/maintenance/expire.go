@@ -40,17 +40,16 @@ type activation struct {
 	Rec   rpc.Record
 }
 
-// expireAt runs the validity sweep against an explicit wall-clock
-// (daemon-stamped, same authority as recall now — injectable here so
-// the boundary is deterministic in tests). Returns the closed
-// old-version IDs (sorted — the caller retires + Syncs) and the
-// activations (the caller swaps the index). Idempotent: closed
-// versions are skipped, never re-closed; an ACTIVE version matches
-// no transition.
-func expireAt(store *truth.Store, idx *index.Index, wallNow int64) ([]string, []activation, error) {
-	var expired []string
-	var activated []activation
-	for _, r := range liveIndex(store, idx) {
+// classifyWindows is the E1 criteria, read-only (R0 dry-run shares it
+// with the real sweep — one implementation, zero drift): given the
+// store-verified live records and tick-now, it names the versions
+// expiry would close (valid_to <= wallNow) and the SCHEDULED versions
+// activation would wake (window opened, still unexpired), both
+// sorted. Expiry outranks activation — a window that opened AND
+// closed between ticks classifies as expired, never activated.
+// Classification never mutates; the callers own the Restatus calls.
+func classifyWindows(recs []rpc.Record, wallNow int64) (expired, activated []string) {
+	for _, r := range recs {
 		if r.Type != rpc.RecordEpisodic {
 			continue
 		}
@@ -58,20 +57,39 @@ func expireAt(store *truth.Store, idx *index.Index, wallNow int64) ([]string, []
 			continue
 		}
 		if r.ValidTime.To <= wallNow {
-			if _, err := store.Restatus(r.ID, rpc.StatusTombstoned); err != nil {
-				return expired, activated, err
-			}
 			expired = append(expired, r.ID)
 			continue
 		}
 		if r.Status == rpc.StatusScheduled && r.ValidTime.From <= wallNow {
-			rec, err := store.Restatus(r.ID, rpc.StatusActive)
-			if err != nil {
-				return expired, activated, err
-			}
-			activated = append(activated, activation{OldID: r.ID, Rec: rec})
+			activated = append(activated, r.ID)
 		}
 	}
 	sort.Strings(expired)
+	sort.Strings(activated)
+	return expired, activated
+}
+
+// expireAt runs the validity sweep against an explicit wall-clock
+// (daemon-stamped, same authority as recall now — injectable here so
+// the boundary is deterministic in tests). Classifies first, then
+// closes/wakes: the returned closed IDs are retired + Synced by the
+// caller, the activations swapped into the serving index. Idempotent:
+// closed versions are skipped, never re-closed; an ACTIVE version
+// matches no transition.
+func expireAt(store *truth.Store, idx *index.Index, wallNow int64) ([]string, []activation, error) {
+	expired, activatedIDs := classifyWindows(liveIndex(store, idx), wallNow)
+	for _, id := range expired {
+		if _, err := store.Restatus(id, rpc.StatusTombstoned); err != nil {
+			return nil, nil, err
+		}
+	}
+	var activated []activation
+	for _, id := range activatedIDs {
+		rec, err := store.Restatus(id, rpc.StatusActive)
+		if err != nil {
+			return expired, activated, err
+		}
+		activated = append(activated, activation{OldID: id, Rec: rec})
+	}
 	return expired, activated, nil
 }
