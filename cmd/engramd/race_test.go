@@ -35,18 +35,19 @@ import (
 // presence identifies the loser, and its clean text is the A3 gate.
 const lockedLine = "store locked by another starter"
 
+// freshDir creates the round's data dir + socket under t.TempDir().
+// The framework removes it (children reaped first — see launch's
+// cleanup contract in takeover_test.go), so no engram-* dir outlives
+// a round.
 func freshDir(t *testing.T) (data, sock string) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "engram-race")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := t.TempDir()
 	return filepath.Join(dir, "data"), filepath.Join(dir, "test.sock")
 }
 
 // raceRound runs one simultaneous-start round and asserts A1+A2+A3
-// for it.
+// for it. Runs as its OWN subtest: the fresh store (~100MB+ prealloc)
+// is deleted when the round returns, never accumulated across rounds.
 func raceRound(t *testing.T, round int) {
 	t.Helper()
 	data, sock := freshDir(t)
@@ -128,7 +129,9 @@ func raceRound(t *testing.T, round int) {
 
 func TestShim_RaceTwoStarters(t *testing.T) {
 	for round := 0; round < 10; round++ {
-		raceRound(t, round)
+		t.Run(fmt.Sprintf("round%d", round), func(t *testing.T) {
+			raceRound(t, round)
+		})
 	}
 }
 

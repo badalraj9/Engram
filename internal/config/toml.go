@@ -4,12 +4,21 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 // Load reads path (TOML subset), applies environment overrides, and
 // returns the validated configuration. An empty path loads defaults.
+//
+// Socket derivation (STEP 0 ruling): when neither the file nor the
+// environment sets uds_path, the socket defaults to
+// <DataDir>/engram.sock — the data dir derives it, so `engramd -tick N`
+// with only ENGRAM_DATA_DIR pinned finds the live holder instead of
+// hunting a CWD-relative ./engram.sock. An explicit uds_path (file or
+// env) wins verbatim; existing registrations that pin both variables
+// are byte-for-byte unaffected.
 func Load(path string) (Config, error) {
 	cfg := Default()
 	if path != "" {
@@ -23,6 +32,9 @@ func Load(path string) (Config, error) {
 	}
 	if err := applyEnv(&cfg); err != nil {
 		return Config{}, err
+	}
+	if strings.TrimSpace(cfg.UDSPath) == "" {
+		cfg.UDSPath = filepath.Join(cfg.DataDir, "engram.sock")
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

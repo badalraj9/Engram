@@ -34,8 +34,45 @@ import (
 var (
 	exeOnce sync.Once
 	exePath string
+	exeDir  string
 	exeErr  error
 )
+
+// TestMain guarantees the suite's disk footprint: the shared exe dir
+// is removed after the run, and any NEW engram-* dir left in the
+// system temp (BUILD-PLAN guard rail: a fresh store costs ~100MB+
+// prealloc) fails the run loudly — no leak may outlive this suite.
+func TestMain(m *testing.M) {
+	before := tempEngramDirs()
+	code := m.Run()
+	if exeDir != "" {
+		_ = os.RemoveAll(exeDir)
+	}
+	leaked := tempEngramDirs()
+	for d := range before {
+		delete(leaked, d)
+	}
+	if len(leaked) > 0 {
+		names := make([]string, 0, len(leaked))
+		for d := range leaked {
+			names = append(names, d)
+		}
+		fmt.Fprintf(os.Stderr, "engramd tests leaked temp dirs: %v\n", names)
+		code = 1
+	}
+	os.Exit(code)
+}
+
+func tempEngramDirs() map[string]bool {
+	found := map[string]bool{}
+	ents, _ := os.ReadDir(os.TempDir())
+	for _, e := range ents {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "engram-") {
+			found[filepath.Join(os.TempDir(), e.Name())] = true
+		}
+	}
+	return found
+}
 
 func exe(t *testing.T) string {
 	t.Helper()
@@ -45,6 +82,7 @@ func exe(t *testing.T) string {
 			exeErr = err
 			return
 		}
+		exeDir = dir
 		exePath = filepath.Join(dir, "engramd-under-test.exe")
 		build := exec.Command("go", "build", "-o", exePath, ".")
 		if out, err := build.CombinedOutput(); err != nil {
@@ -66,16 +104,28 @@ type child struct {
 	stdout *strings.Builder
 	stderr *strings.Builder
 	done   chan error
+	exited chan struct{}
 }
 
-// startChildEnv launches mode with explicit ENGRAM_* pins — the env
-// shape the host configs carry. Only safe to call from the test
-// goroutine (uses t.Fatal).
-func startChildEnv(t *testing.T, mode, data, sock string) *child {
+// launch starts mode with extra env pins layered over os.Environ().
+// Cleanup kills the child and WAITS for the reaper before returning —
+// on Windows the store dir's file locks release only on process
+// reaping, so the LIFO-registered t.TempDir() removal (the round's
+// fresh store, ~100MB+ prealloc) must never run while a child lives.
+func launch(t *testing.T, mode string, extraEnv ...string) *child {
 	t.Helper()
-	c := &child{stdout: &strings.Builder{}, stderr: &strings.Builder{}, done: make(chan error, 1)}
-	cmd := exec.Command(exe(t), mode)
-	cmd.Env = append(os.Environ(), "ENGRAM_DATA_DIR="+data, "ENGRAM_UDS_PATH="+sock)
+	c := &child{
+		stdout: &strings.Builder{},
+		stderr: &strings.Builder{},
+		done:   make(chan error, 1),
+		exited: make(chan struct{}),
+	}
+	argv := []string{mode}
+	if mode == "" { // bare serve: no flag argument at all
+		argv = nil
+	}
+	cmd := exec.Command(exe(t), argv...)
+	cmd.Env = append(os.Environ(), extraEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -95,12 +145,35 @@ func startChildEnv(t *testing.T, mode, data, sock string) *child {
 	}
 	go func() { _, _ = io.Copy(c.stdout, out) }()
 	go func() { _, _ = io.Copy(c.stderr, errPipe) }()
-	go func() { c.done <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		c.done <- err
+		close(c.exited)
+	}()
 	t.Cleanup(func() {
 		_ = stdin.Close()
 		_ = c.cmd.Process.Kill()
+		select {
+		case <-c.exited:
+		case <-time.After(5 * time.Second):
+		}
 	})
 	return c
+}
+
+// startChildEnv launches mode with explicit ENGRAM_* pins — the env
+// shape the host configs carry (both vars pinned, socket explicit).
+// Only safe to call from the test goroutine (uses t.Fatal).
+func startChildEnv(t *testing.T, mode, data, sock string) *child {
+	t.Helper()
+	return launch(t, mode, "ENGRAM_DATA_DIR="+data, "ENGRAM_UDS_PATH="+sock)
+}
+
+// startChildData launches mode with ONLY ENGRAM_DATA_DIR pinned — the
+// STEP 0 shape: the data dir derives the socket.
+func startChildData(t *testing.T, mode, data string) *child {
+	t.Helper()
+	return launch(t, mode, "ENGRAM_DATA_DIR="+data)
 }
 
 func (c *child) waitSock(t *testing.T, sock string) {
@@ -133,8 +206,11 @@ func awaitHolder(t *testing.T, sock string, kids ...*child) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("socket never answered (stderrs: %q / %q)",
-				kids[0].stderr.String(), kids[1].stderr.String())
+			stderrs := make([]string, len(kids))
+			for i, k := range kids {
+				stderrs[i] = k.stderr.String()
+			}
+			t.Fatalf("socket never answered (stderrs: %q)", stderrs)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

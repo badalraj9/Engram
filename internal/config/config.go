@@ -12,7 +12,12 @@ import (
 
 // Config is the validated daemon configuration.
 type Config struct {
-	DataDir          string
+	DataDir string
+	// UDSPath is the holder's socket. Load derives it when no source
+	// (file or env) sets one: <DataDir>/engram.sock — so pinning
+	// ENGRAM_DATA_DIR alone moves the socket with the store (STEP 0
+	// ruling: the data dir derives the socket, never the CWD). An
+	// explicit uds_path from any source always wins verbatim.
 	UDSPath          string
 	Beta             float64
 	Dim              int
@@ -31,10 +36,12 @@ type Config struct {
 }
 
 // Default returns the v1 starting values (SRS FR6 beta ~ 0.5, d = 2048).
+// UDSPath is left empty — Load derives it from DataDir after file and
+// env have spoken; Default itself must not pre-empt that derivation.
 func Default() Config {
 	return Config{
 		DataDir:          "./engram-data",
-		UDSPath:          "./engram.sock",
+		UDSPath:          "",
 		Beta:             0.5,
 		Dim:              2048,
 		WorkingCap:       64,
