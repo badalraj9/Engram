@@ -7,6 +7,7 @@ package config
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 )
 
@@ -36,12 +37,12 @@ type Config struct {
 }
 
 // Default returns the v1 starting values (SRS FR6 beta ~ 0.5, d = 2048).
-// UDSPath is left empty — Load derives it from DataDir after file and
-// env have spoken; Default itself must not pre-empt that derivation.
+// UDSPath follows the derived shape (<DataDir>/engram.sock) so a
+// hand-built Config is immediately valid; Load re-derives it against
+// whatever data dir the file and env actually pinned.
 func Default() Config {
-	return Config{
+	cfg := Config{
 		DataDir:          "./engram-data",
-		UDSPath:          "",
 		Beta:             0.5,
 		Dim:              2048,
 		WorkingCap:       64,
@@ -52,6 +53,8 @@ func Default() Config {
 		RateLimitPerSec:  100,
 		CompactionGuard:  true,
 	}
+	cfg.UDSPath = filepath.Join(cfg.DataDir, "engram.sock")
+	return cfg
 }
 
 // Validate rejects unusable configurations.

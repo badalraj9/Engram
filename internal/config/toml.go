@@ -21,6 +21,11 @@ import (
 // are byte-for-byte unaffected.
 func Load(path string) (Config, error) {
 	cfg := Default()
+	// Empty UDSPath is the sentinel meaning "no source set one" —
+	// Default's derived value is discarded here so the derivation
+	// below runs against the data dir the file and env ACTUALLY
+	// pinned, not the default one.
+	cfg.UDSPath = ""
 	if path != "" {
 		entries, err := parseTOML(path)
 		if err != nil {
